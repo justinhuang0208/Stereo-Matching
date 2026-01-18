@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import math
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
+
+_SCIPY_MEDIAN_FILTER: Optional[Callable[..., np.ndarray]] = None
+_SCIPY_CHECKED: bool = False
 
 
 def _validate_2d(image: np.ndarray, name: str) -> None:
@@ -38,19 +43,23 @@ def _infer_radius_from_sigma(sigma: float) -> int:
     return max(radius, 1)
 
 
-def median_filter(image: np.ndarray, radius: int) -> np.ndarray:
-    """使用固定視窗半徑的 median filter。
+def _get_scipy_median_filter() -> Optional[Callable[..., np.ndarray]]:
+    """取得 SciPy median_filter 函式（若可用）。"""
+    global _SCIPY_MEDIAN_FILTER, _SCIPY_CHECKED
+    if _SCIPY_CHECKED:
+        return _SCIPY_MEDIAN_FILTER
+    _SCIPY_CHECKED = True
+    spec = importlib.util.find_spec("scipy.ndimage")
+    if spec is None:
+        return None
+    module = importlib.import_module("scipy.ndimage")
+    scipy_median_filter: Callable[..., np.ndarray] = getattr(module, "median_filter")
+    _SCIPY_MEDIAN_FILTER = scipy_median_filter
+    return _SCIPY_MEDIAN_FILTER
 
-    參數:
-        image: 輸入 2D 影像。
-        radius: 視窗半徑。
 
-    回傳:
-        濾波後影像，形狀為 (H, W)。
-    """
-    _validate_2d(image, "image")
-    if radius <= 0:
-        raise ValueError("radius 必須為正整數。")
+def _median_filter_naive(image: np.ndarray, radius: int) -> np.ndarray:
+    """使用逐像素掃描的 median filter。"""
     height: int = image.shape[0]
     width: int = image.shape[1]
     window_size: int = radius * 2 + 1
@@ -61,6 +70,70 @@ def median_filter(image: np.ndarray, radius: int) -> np.ndarray:
             window: np.ndarray = padded[y : y + window_size, x : x + window_size]
             output[y, x] = float(np.median(window))
     return output
+
+
+def _median_filter_vectorized(image: np.ndarray, radius: int, block_rows: int) -> np.ndarray:
+    """使用滑動視窗與分塊策略加速 median filter。"""
+    if block_rows <= 0:
+        raise ValueError("block_rows 必須為正整數。")
+    height: int = image.shape[0]
+    width: int = image.shape[1]
+    window_size: int = radius * 2 + 1
+    padded: np.ndarray = np.pad(image, ((radius, radius), (radius, radius)), mode="edge")
+    output: np.ndarray = np.zeros((height, width), dtype=np.float32)
+    for row_start in range(0, height, block_rows):
+        row_end: int = min(row_start + block_rows, height)
+        chunk: np.ndarray = padded[row_start : row_end + 2 * radius, :]
+        windows: np.ndarray = np.lib.stride_tricks.sliding_window_view(
+            chunk, (window_size, window_size)
+        )
+        block_median: np.ndarray = np.median(windows, axis=(-1, -2))
+        output[row_start:row_end, :] = block_median.astype(np.float32)
+    return output
+
+
+def _median_filter_scipy(image: np.ndarray, radius: int) -> np.ndarray:
+    """使用 SciPy 的 median filter。"""
+    scipy_filter: Optional[Callable[..., np.ndarray]] = _get_scipy_median_filter()
+    if scipy_filter is None:
+        raise ValueError("scipy 未安裝，無法使用 scipy 方法。")
+    window_size: int = radius * 2 + 1
+    filtered: np.ndarray = scipy_filter(image, size=window_size, mode="nearest")
+    return filtered.astype(np.float32)
+
+
+def median_filter(
+    image: np.ndarray,
+    radius: int,
+    method: str = "auto",
+    block_rows: int = 128,
+) -> np.ndarray:
+    """使用固定視窗半徑的 median filter。
+
+    參數:
+        image: 輸入 2D 影像。
+        radius: 視窗半徑。
+        method: 計算方法，"auto"、"scipy"、"vectorized" 或 "naive"。
+        block_rows: 每次處理的列數，用於控制記憶體占用。
+
+    回傳:
+        濾波後影像，形狀為 (H, W)。
+    """
+    _validate_2d(image, "image")
+    if radius <= 0:
+        raise ValueError("radius 必須為正整數。")
+    method_key: str = method.strip().lower()
+    if method_key == "auto":
+        if _get_scipy_median_filter() is not None:
+            return _median_filter_scipy(image, radius)
+        return _median_filter_vectorized(image, radius, block_rows)
+    if method_key == "scipy":
+        return _median_filter_scipy(image, radius)
+    if method_key == "vectorized":
+        return _median_filter_vectorized(image, radius, block_rows)
+    if method_key == "naive":
+        return _median_filter_naive(image, radius)
+    raise ValueError("method 必須為 'auto'、'scipy'、'vectorized' 或 'naive'。")
 
 
 def gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:

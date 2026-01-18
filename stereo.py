@@ -18,6 +18,8 @@ DEFAULT_GUIDED_RADIUS: int = 3
 DEFAULT_GUIDED_EPS: float = 1000.0
 DEFAULT_FILTER_TYPE: str = "guided"
 DEFAULT_MEDIAN_RADIUS: int = 3
+DEFAULT_MEDIAN_METHOD: str = "auto"
+DEFAULT_MEDIAN_BLOCK_ROWS: int = 128
 DEFAULT_GAUSSIAN_SIGMA: float = 1.0
 DEFAULT_BILATERAL_SIGMA: float = 1.0
 
@@ -49,6 +51,8 @@ def aggregate_cost_volume(
     guided_eps: float,
     filter_type: str = DEFAULT_FILTER_TYPE,
     median_radius: int = DEFAULT_MEDIAN_RADIUS,
+    median_method: str = DEFAULT_MEDIAN_METHOD,
+    median_block_rows: int = DEFAULT_MEDIAN_BLOCK_ROWS,
     gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
     bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
@@ -62,6 +66,8 @@ def aggregate_cost_volume(
         guided_eps: 正則化項。
         filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
         median_radius: Median Filter 視窗半徑。
+        median_method: Median Filter 計算方法（auto, scipy, vectorized, naive）。
+        median_block_rows: Median Filter 分塊列數。
         gaussian_sigma: Gaussian Filter 標準差。
         bilateral_sigma: Bilateral Filter 標準差。
 
@@ -90,7 +96,12 @@ def aggregate_cost_volume(
             filtered: np.ndarray = guided_filter(guide, layer, guided_radius, guided_eps)
             label: str = "Guided Filter"
         elif filter_key == "median":
-            filtered = median_filter(layer, median_radius)
+            filtered = median_filter(
+                layer,
+                median_radius,
+                method=median_method,
+                block_rows=median_block_rows,
+            )
             label = "Median Filter"
         elif filter_key == "gaussian":
             filtered = gaussian_filter(layer, gaussian_sigma)
@@ -131,6 +142,8 @@ def compute_disparity(
     guided_eps: float = DEFAULT_GUIDED_EPS,
     filter_type: str = DEFAULT_FILTER_TYPE,
     median_radius: int = DEFAULT_MEDIAN_RADIUS,
+    median_method: str = DEFAULT_MEDIAN_METHOD,
+    median_block_rows: int = DEFAULT_MEDIAN_BLOCK_ROWS,
     gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
     bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
     show_progress: bool = False,
@@ -147,6 +160,8 @@ def compute_disparity(
         guided_eps: Guided Filter 正則化項。
         filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
         median_radius: Median Filter 視窗半徑。
+        median_method: Median Filter 計算方法（auto, scipy, vectorized, naive）。
+        median_block_rows: Median Filter 分塊列數。
         gaussian_sigma: Gaussian Filter 標準差。
         bilateral_sigma: Bilateral Filter 標準差。
 
@@ -170,6 +185,8 @@ def compute_disparity(
         guided_eps,
         filter_type=filter_type,
         median_radius=median_radius,
+        median_method=median_method,
+        median_block_rows=median_block_rows,
         gaussian_sigma=gaussian_sigma,
         bilateral_sigma=bilateral_sigma,
         progress_callback=progress_callback,
@@ -252,6 +269,19 @@ def _parse_args() -> argparse.Namespace:
         help="聚合濾波器類型",
     )
     parser.add_argument("--median_radius", type=int, default=DEFAULT_MEDIAN_RADIUS, help="Median Filter 半徑")
+    parser.add_argument(
+        "--median_method",
+        type=str,
+        default=DEFAULT_MEDIAN_METHOD,
+        choices=["auto", "scipy", "vectorized", "naive"],
+        help="Median Filter 計算方法",
+    )
+    parser.add_argument(
+        "--median_block_rows",
+        type=int,
+        default=DEFAULT_MEDIAN_BLOCK_ROWS,
+        help="Median Filter 分塊列數",
+    )
     parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
     parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
     parser.add_argument("--output", type=str, default=None, help="輸出視差圖路徑")
@@ -279,6 +309,8 @@ def main() -> None:
         guided_eps=args.guided_eps,
         filter_type=args.filter,
         median_radius=args.median_radius,
+        median_method=args.median_method,
+        median_block_rows=args.median_block_rows,
         gaussian_sigma=args.gaussian_sigma,
         bilateral_sigma=args.bilateral_sigma,
         show_progress=args.progress,
