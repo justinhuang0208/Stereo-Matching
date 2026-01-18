@@ -287,9 +287,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
     parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
-    parser.add_argument("--output", type=str, default=None, help="輸出視差圖路徑")
-    parser.add_argument("--output_color", type=str, default=None, help="輸出彩色視差圖路徑")
-    parser.add_argument("--output_npy", type=str, default=None, help="輸出視差 npy 路徑")
     parser.add_argument("--progress", action="store_true", help="顯示簡單進度")
     return parser.parse_args()
 
@@ -355,9 +352,6 @@ def _build_run_metadata(
         "progress": str(bool(args.progress)),
         "output_disparity_png": str(output_gray),
         "output_disparity_color_png": str(output_color),
-        "output_arg_gray": str(args.output) if args.output is not None else "",
-        "output_arg_color": str(args.output_color) if args.output_color is not None else "",
-        "output_arg_npy": str(args.output_npy) if args.output_npy is not None else "",
     }
 
 
@@ -408,13 +402,6 @@ def main() -> None:
     _save_disparity_color_image(disparity, args.dmax, str(output_color))
     metadata: Dict[str, str] = _build_run_metadata(args, run_dir, output_gray, output_color)
     _write_run_metadata(run_dir / "params.json", metadata)
-
-    if args.output is not None:
-        _save_disparity_image(disparity, args.dmax, args.output)
-    if args.output_color is not None:
-        _save_disparity_color_image(disparity, args.dmax, args.output_color)
-    if args.output_npy is not None:
-        np.save(args.output_npy, disparity)
 
     _ = min_cost
 

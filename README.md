@@ -34,19 +34,13 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--median_radius`: Median Filter 視窗半徑（預設：3）
 - `--gaussian_sigma`: Gaussian sigma（預設：1.0）
 - `--bilateral_sigma`: Bilateral sigma（預設：1.0）
-- `--output`: 輸出視差圖路徑（PNG 格式，可選）
-- `--output_color`: 輸出彩色視差圖路徑（PNG 格式，可選）
-- `--output_npy`: 輸出視差 numpy 陣列路徑（.npy 格式，可選）
 - `--progress`: 顯示簡單進度（可選）
 
 #### 範例
 
 ```bash
 # 基本使用
-python stereo.py --left left.png --right right.png --dmax 64 --output disparity.png
-
-# 輸出彩色視差圖
-python stereo.py --left left.png --right right.png --dmax 64 --output_color disparity_color.png
+python stereo.py --left left.png --right right.png --dmax 64
 
 # 完整參數範例
 python stereo.py \
@@ -61,9 +55,6 @@ python stereo.py \
   --median_radius 3 \
   --gaussian_sigma 1.0 \
   --bilateral_sigma 1.0 \
-  --output disparity.png \
-  --output_color disparity_color.png \
-  --output_npy disparity.npy \
   --progress
 ```
 
@@ -234,8 +225,10 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 
 ## 輸出說明
 
-- **視差圖 (disparity)**: 每個像素的視差值，範圍為 0 到 dmax-1
-- **彩色視差圖**: 以 Jet 色盤呈現視差分佈，便於視覺化
+- **輸出資料夾**: 每次執行會輸出到 `result/<YYYYMMDDHHMM>`，同分鐘重複執行會自動加上 `_01`、`_02` 避免覆寫
+- **視差圖 (disparity.png)**: 每個像素的視差值，範圍為 0 到 dmax-1
+- **彩色視差圖 (disparity_color.png)**: 以 Jet 色盤呈現視差分佈，便於視覺化
+- **參數檔 (params.json)**: 這次執行的所有參數與輸出路徑
 - **最小 cost 圖 (min_cost)**: 可用於除錯，觀察哪些區域匹配困難
 
 ## 注意事項
