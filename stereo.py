@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from typing import Callable, Optional, Tuple
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -15,7 +18,7 @@ from stereo_io import ensure_same_shape, read_image, to_gray
 DEFAULT_WCT_RADIUS: int = 4
 DEFAULT_BASE_WEIGHT: float = 8.0
 DEFAULT_GUIDED_RADIUS: int = 3
-DEFAULT_GUIDED_EPS: float = 1000.0
+DEFAULT_GUIDED_EPS: float = 0.0154
 DEFAULT_FILTER_TYPE: str = "guided"
 DEFAULT_MEDIAN_RADIUS: int = 3
 DEFAULT_MEDIAN_METHOD: str = "auto"
@@ -291,9 +294,94 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _create_run_directory(base_dir: str, timestamp: str) -> Path:
+    """建立本次執行的輸出資料夾。
+
+    參數:
+        base_dir: 輸出根資料夾。
+        timestamp: 時間字串（YYYYMMDDHHMM）。
+
+    回傳:
+        本次執行資料夾 Path。
+    """
+    root: Path = Path(base_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    run_dir: Path = root / timestamp
+    if not run_dir.exists():
+        run_dir.mkdir(parents=True, exist_ok=False)
+        return run_dir
+    suffix: int = 1
+    while True:
+        candidate: Path = root / f"{timestamp}_{suffix:02d}"
+        if not candidate.exists():
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        suffix += 1
+
+
+def _build_run_metadata(
+    args: argparse.Namespace,
+    run_dir: Path,
+    output_gray: Path,
+    output_color: Path,
+) -> Dict[str, str]:
+    """建立本次執行的參數摘要。
+
+    參數:
+        args: CLI 參數。
+        run_dir: 本次執行資料夾。
+        output_gray: 灰階視差圖輸出路徑。
+        output_color: 彩色視差圖輸出路徑。
+
+    回傳:
+        參數摘要字典。
+    """
+    return {
+        "timestamp": run_dir.name,
+        "run_dir": str(run_dir),
+        "left": str(args.left),
+        "right": str(args.right),
+        "dmax": str(args.dmax),
+        "wct_radius": str(args.wct_radius),
+        "base_weight": str(args.base_weight),
+        "guided_radius": str(args.guided_radius),
+        "guided_eps": str(args.guided_eps),
+        "filter": str(args.filter),
+        "median_radius": str(args.median_radius),
+        "median_method": str(args.median_method),
+        "median_block_rows": str(args.median_block_rows),
+        "gaussian_sigma": str(args.gaussian_sigma),
+        "bilateral_sigma": str(args.bilateral_sigma),
+        "progress": str(bool(args.progress)),
+        "output_disparity_png": str(output_gray),
+        "output_disparity_color_png": str(output_color),
+        "output_arg_gray": str(args.output) if args.output is not None else "",
+        "output_arg_color": str(args.output_color) if args.output_color is not None else "",
+        "output_arg_npy": str(args.output_npy) if args.output_npy is not None else "",
+    }
+
+
+def _write_run_metadata(path: Path, metadata: Dict[str, str]) -> None:
+    """輸出本次執行參數檔案。
+
+    參數:
+        path: 輸出檔案路徑。
+        metadata: 參數摘要。
+
+    回傳:
+        None。
+    """
+    with path.open("w", encoding="utf-8") as handler:
+        json.dump(metadata, handler, ensure_ascii=True, indent=2, sort_keys=True)
+
+
 def main() -> None:
     """簡易驗證入口：讀入左右影像並輸出視差圖。"""
     args: argparse.Namespace = _parse_args()
+    timestamp: str = datetime.now().strftime("%Y%m%d%H%M")
+    run_dir: Path = _create_run_directory("result", timestamp)
+    output_gray: Path = run_dir / "disparity.png"
+    output_color: Path = run_dir / "disparity_color.png"
     left_img: np.ndarray = read_image(args.left)
     right_img: np.ndarray = read_image(args.right)
     left_gray: np.ndarray = to_gray(left_img)
@@ -315,6 +403,11 @@ def main() -> None:
         bilateral_sigma=args.bilateral_sigma,
         show_progress=args.progress,
     )
+
+    _save_disparity_image(disparity, args.dmax, str(output_gray))
+    _save_disparity_color_image(disparity, args.dmax, str(output_color))
+    metadata: Dict[str, str] = _build_run_metadata(args, run_dir, output_gray, output_color)
+    _write_run_metadata(run_dir / "params.json", metadata)
 
     if args.output is not None:
         _save_disparity_image(disparity, args.dmax, args.output)
