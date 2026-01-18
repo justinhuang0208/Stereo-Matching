@@ -8,8 +8,18 @@ import numpy as np
 from PIL import Image
 
 from census import compute_wct_cost_volume
+from filters import bilateral_filter, gaussian_filter, median_filter
 from guided_filter import guided_filter
 from stereo_io import ensure_same_shape, read_image, to_gray
+
+DEFAULT_WCT_RADIUS: int = 4
+DEFAULT_BASE_WEIGHT: float = 8.0
+DEFAULT_GUIDED_RADIUS: int = 3
+DEFAULT_GUIDED_EPS: float = 1000.0
+DEFAULT_FILTER_TYPE: str = "guided"
+DEFAULT_MEDIAN_RADIUS: int = 3
+DEFAULT_GAUSSIAN_SIGMA: float = 1.0
+DEFAULT_BILATERAL_SIGMA: float = 1.0
 
 
 def _print_progress(current: int, total: int, label: str) -> None:
@@ -35,17 +45,25 @@ def _print_progress(current: int, total: int, label: str) -> None:
 def aggregate_cost_volume(
     dsi: np.ndarray,
     guide: np.ndarray,
-    radius: int,
-    eps: float,
+    guided_radius: int,
+    guided_eps: float,
+    filter_type: str = DEFAULT_FILTER_TYPE,
+    median_radius: int = DEFAULT_MEDIAN_RADIUS,
+    gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
+    bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> np.ndarray:
-    """使用 Guided Filter 對每個 disparity layer 做 cost aggregation。
+    """使用指定的濾波器對每個 disparity layer 做 cost aggregation。
 
     參數:
         dsi: 原始 cost volume，形狀為 (H, W, D)。
         guide: 引導影像（灰階）。
-        radius: Guided Filter 視窗半徑。
-        eps: 正則化項。
+        guided_radius: Guided Filter 視窗半徑。
+        guided_eps: 正則化項。
+        filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
+        median_radius: Median Filter 視窗半徑。
+        gaussian_sigma: Gaussian Filter 標準差。
+        bilateral_sigma: Bilateral Filter 標準差。
 
     回傳:
         聚合後 cost volume，形狀為 (H, W, D)。
@@ -61,14 +79,28 @@ def aggregate_cost_volume(
     width: int = dsi.shape[1]
     dmax: int = dsi.shape[2]
     aggregated: np.ndarray = np.zeros((height, width, dmax), dtype=np.float32)
+    filter_key: str = filter_type.strip().lower()
+    supported: Tuple[str, ...] = ("guided", "median", "gaussian", "bilateral")
+    if filter_key not in supported:
+        raise ValueError(f"filter_type 必須為 {supported} 其中之一。")
 
     for d in range(dmax):
-        aggregated[:, :, d] = guided_filter(guide, dsi[:, :, d], radius, eps)
+        layer: np.ndarray = dsi[:, :, d]
+        if filter_key == "guided":
+            filtered: np.ndarray = guided_filter(guide, layer, guided_radius, guided_eps)
+            label: str = "Guided Filter"
+        elif filter_key == "median":
+            filtered = median_filter(layer, median_radius)
+            label = "Median Filter"
+        elif filter_key == "gaussian":
+            filtered = gaussian_filter(layer, gaussian_sigma)
+            label = "Gaussian Filter"
+        else:
+            filtered = bilateral_filter(layer, bilateral_sigma)
+            label = "Bilateral Filter"
+        aggregated[:, :, d] = filtered
         if progress_callback is not None:
-            progress_callback(d + 1, dmax, "Guided Filter")
-
-    if progress_callback is not None:
-        sys.stdout.write("\n")
+            progress_callback(d + 1, dmax, label)
 
     return aggregated
 
@@ -93,13 +125,17 @@ def compute_disparity(
     left_gray: np.ndarray,
     right_gray: np.ndarray,
     dmax: int,
-    wct_radius: int = 4,
-    base_weight: float = 8.0,
-    guided_radius: int = 3,
-    guided_eps: float = 1e-3,
+    wct_radius: int = DEFAULT_WCT_RADIUS,
+    base_weight: float = DEFAULT_BASE_WEIGHT,
+    guided_radius: int = DEFAULT_GUIDED_RADIUS,
+    guided_eps: float = DEFAULT_GUIDED_EPS,
+    filter_type: str = DEFAULT_FILTER_TYPE,
+    median_radius: int = DEFAULT_MEDIAN_RADIUS,
+    gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
+    bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
     show_progress: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """完整流程：WCT cost volume -> Guided Filter 聚合 -> WTA。
+    """完整流程：WCT cost volume -> 濾波聚合 -> WTA。
 
     參數:
         left_gray: 左影像灰階陣列。
@@ -109,14 +145,16 @@ def compute_disparity(
         base_weight: WCT 基準權重。
         guided_radius: Guided Filter 半徑。
         guided_eps: Guided Filter 正則化項。
+        filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
+        median_radius: Median Filter 視窗半徑。
+        gaussian_sigma: Gaussian Filter 標準差。
+        bilateral_sigma: Bilateral Filter 標準差。
 
     回傳:
         (disparity, min_cost)。
     """
     ensure_same_shape(left_gray, right_gray)
     progress_callback: Optional[Callable[[int, int, str], None]] = _print_progress if show_progress else None
-    if show_progress:
-        print("WCT cost volume: 開始")
     dsi: np.ndarray = compute_wct_cost_volume(
         left_gray,
         right_gray,
@@ -125,14 +163,15 @@ def compute_disparity(
         base_weight=base_weight,
         progress_callback=progress_callback,
     )
-    if show_progress:
-        sys.stdout.write("\n")
-        print("WCT cost volume: 完成")
     aggregated: np.ndarray = aggregate_cost_volume(
         dsi,
         left_gray,
         guided_radius,
         guided_eps,
+        filter_type=filter_type,
+        median_radius=median_radius,
+        gaussian_sigma=gaussian_sigma,
+        bilateral_sigma=bilateral_sigma,
         progress_callback=progress_callback,
     )
     disparity, min_cost = winner_take_all(aggregated)
@@ -157,17 +196,66 @@ def _save_disparity_image(disparity: np.ndarray, dmax: int, path: str) -> None:
     disp_img.save(path)
 
 
+def _jet_colormap(values: np.ndarray) -> np.ndarray:
+    """將 0~1 的數值映射為 Jet 顏色。
+
+    參數:
+        values: 0~1 的正規化陣列。
+
+    回傳:
+        RGB 顏色陣列，形狀為 (..., 3)，範圍 0~1。
+    """
+    if values.ndim < 2:
+        raise ValueError("values 必須至少為 2D。")
+    v: np.ndarray = np.clip(values.astype(np.float32), 0.0, 1.0)
+    four_v: np.ndarray = 4.0 * v
+    r: np.ndarray = np.clip(np.minimum(four_v - 1.5, -four_v + 4.5), 0.0, 1.0)
+    g: np.ndarray = np.clip(np.minimum(four_v - 0.5, -four_v + 3.5), 0.0, 1.0)
+    b: np.ndarray = np.clip(np.minimum(four_v + 0.5, -four_v + 2.5), 0.0, 1.0)
+    return np.stack([r, g, b], axis=-1)
+
+
+def _save_disparity_color_image(disparity: np.ndarray, dmax: int, path: str) -> None:
+    """將視差圖以 Jet 色盤輸出成彩色圖片。
+
+    參數:
+        disparity: 視差圖。
+        dmax: 最大視差數量。
+        path: 輸出檔案路徑。
+
+    回傳:
+        None。
+    """
+    if dmax <= 0:
+        raise ValueError("dmax 必須為正整數。")
+    disp_norm: np.ndarray = disparity.astype(np.float32) / float(dmax - 1)
+    rgb: np.ndarray = _jet_colormap(disp_norm) * 255.0
+    disp_img: Image.Image = Image.fromarray(rgb.astype(np.uint8), mode="RGB")
+    disp_img.save(path)
+
+
 def _parse_args() -> argparse.Namespace:
     """解析 CLI 參數。"""
     parser = argparse.ArgumentParser(description="Stereo Matching (WCT + Guided Filter + WTA)")
     parser.add_argument("--left", required=True, type=str, help="左影像路徑")
     parser.add_argument("--right", required=True, type=str, help="右影像路徑")
     parser.add_argument("--dmax", required=True, type=int, help="最大視差")
-    parser.add_argument("--wct_radius", type=int, default=4, help="WCT 半徑")
-    parser.add_argument("--base_weight", type=float, default=8.0, help="WCT 基準權重")
-    parser.add_argument("--guided_radius", type=int, default=3, help="Guided Filter 半徑")
-    parser.add_argument("--guided_eps", type=float, default=1e-3, help="Guided Filter epsilon")
+    parser.add_argument("--wct_radius", type=int, default=DEFAULT_WCT_RADIUS, help="WCT 半徑")
+    parser.add_argument("--base_weight", type=float, default=DEFAULT_BASE_WEIGHT, help="WCT 基準權重")
+    parser.add_argument("--guided_radius", type=int, default=DEFAULT_GUIDED_RADIUS, help="Guided Filter 半徑")
+    parser.add_argument("--guided_eps", type=float, default=DEFAULT_GUIDED_EPS, help="Guided Filter epsilon")
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default=DEFAULT_FILTER_TYPE,
+        choices=["guided", "median", "gaussian", "bilateral"],
+        help="聚合濾波器類型",
+    )
+    parser.add_argument("--median_radius", type=int, default=DEFAULT_MEDIAN_RADIUS, help="Median Filter 半徑")
+    parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
+    parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
     parser.add_argument("--output", type=str, default=None, help="輸出視差圖路徑")
+    parser.add_argument("--output_color", type=str, default=None, help="輸出彩色視差圖路徑")
     parser.add_argument("--output_npy", type=str, default=None, help="輸出視差 npy 路徑")
     parser.add_argument("--progress", action="store_true", help="顯示簡單進度")
     return parser.parse_args()
@@ -189,11 +277,17 @@ def main() -> None:
         base_weight=args.base_weight,
         guided_radius=args.guided_radius,
         guided_eps=args.guided_eps,
+        filter_type=args.filter,
+        median_radius=args.median_radius,
+        gaussian_sigma=args.gaussian_sigma,
+        bilateral_sigma=args.bilateral_sigma,
         show_progress=args.progress,
     )
 
     if args.output is not None:
         _save_disparity_image(disparity, args.dmax, args.output)
+    if args.output_color is not None:
+        _save_disparity_color_image(disparity, args.dmax, args.output_color)
     if args.output_npy is not None:
         np.save(args.output_npy, disparity)
 

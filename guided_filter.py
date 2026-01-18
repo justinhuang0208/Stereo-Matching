@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
@@ -21,33 +22,51 @@ def integral_image(image: np.ndarray) -> np.ndarray:
     return integral
 
 
-def _box_sum_from_integral(integral: np.ndarray, radius: int) -> np.ndarray:
-    """使用 integral image 計算每個像素的視窗總和。
+@dataclass(frozen=True)
+class BoxFilterIndex:
+    """Box filter 所需的索引與區域面積。"""
 
-    參數:
-        integral: integral image，大小為 (H+1, W+1)。
-        radius: 視窗半徑。
+    y0: np.ndarray
+    y1: np.ndarray
+    x0: np.ndarray
+    x1: np.ndarray
+    area: np.ndarray
 
-    回傳:
-        每個像素的視窗總和，形狀為 (H, W)。
-    """
+
+def _prepare_box_filter_index(height: int, width: int, radius: int) -> BoxFilterIndex:
+    """預先計算 box filter 的索引與區域面積。"""
+    if height <= 0 or width <= 0:
+        raise ValueError("height 與 width 必須為正整數。")
     if radius < 0:
         raise ValueError("radius 必須為非負整數。")
-    height: int = integral.shape[0] - 1
-    width: int = integral.shape[1] - 1
-
     ys: np.ndarray = np.arange(height)
     xs: np.ndarray = np.arange(width)
     y0: np.ndarray = np.clip(ys - radius, 0, height - 1)
     y1: np.ndarray = np.clip(ys + radius, 0, height - 1)
     x0: np.ndarray = np.clip(xs - radius, 0, width - 1)
     x1: np.ndarray = np.clip(xs + radius, 0, width - 1)
+    area: np.ndarray = (y1 - y0 + 1)[:, None] * (x1 - x0 + 1)[None, :]
+    return BoxFilterIndex(y0=y0, y1=y1, x0=x0, x1=x1, area=area.astype(np.float32))
 
+
+def _box_sum_from_integral(
+    integral: np.ndarray,
+    indices: BoxFilterIndex,
+) -> np.ndarray:
+    """使用 integral image 計算每個像素的視窗總和。
+
+    參數:
+        integral: integral image，大小為 (H+1, W+1)。
+        indices: box filter 的索引與區域面積。
+
+    回傳:
+        每個像素的視窗總和，形狀為 (H, W)。
+    """
     sum_region: np.ndarray = (
-        integral[y1[:, None] + 1, x1[None, :] + 1]
-        - integral[y0[:, None], x1[None, :] + 1]
-        - integral[y1[:, None] + 1, x0[None, :]]
-        + integral[y0[:, None], x0[None, :]]
+        integral[indices.y1[:, None] + 1, indices.x1[None, :] + 1]
+        - integral[indices.y0[:, None], indices.x1[None, :] + 1]
+        - integral[indices.y1[:, None] + 1, indices.x0[None, :]]
+        + integral[indices.y0[:, None], indices.x0[None, :]]
     )
     return sum_region.astype(np.float32)
 
@@ -62,18 +81,17 @@ def box_filter_mean(image: np.ndarray, radius: int) -> np.ndarray:
     回傳:
         區域平均影像，形狀為 (H, W)。
     """
+    indices: BoxFilterIndex = _prepare_box_filter_index(image.shape[0], image.shape[1], radius)
+    return box_filter_mean_with_indices(image, indices)
+
+
+def box_filter_mean_with_indices(image: np.ndarray, indices: BoxFilterIndex) -> np.ndarray:
+    """使用預先計算的索引來計算 box filter 的區域平均。"""
+    if image.ndim != 2:
+        raise ValueError("image 必須為 2D。")
     integral: np.ndarray = integral_image(image.astype(np.float32))
-    sum_region: np.ndarray = _box_sum_from_integral(integral, radius)
-    height: int = image.shape[0]
-    width: int = image.shape[1]
-    ys: np.ndarray = np.arange(height)
-    xs: np.ndarray = np.arange(width)
-    y0: np.ndarray = np.clip(ys - radius, 0, height - 1)
-    y1: np.ndarray = np.clip(ys + radius, 0, height - 1)
-    x0: np.ndarray = np.clip(xs - radius, 0, width - 1)
-    x1: np.ndarray = np.clip(xs + radius, 0, width - 1)
-    area: np.ndarray = (y1 - y0 + 1)[:, None] * (x1 - x0 + 1)[None, :]
-    return sum_region / area.astype(np.float32)
+    sum_region: np.ndarray = _box_sum_from_integral(integral, indices)
+    return sum_region / indices.area
 
 
 def guided_filter(
@@ -105,10 +123,11 @@ def guided_filter(
     guide_f: np.ndarray = guide.astype(np.float32)
     src_f: np.ndarray = src.astype(np.float32)
 
-    mean_guide: np.ndarray = box_filter_mean(guide_f, radius)
-    mean_src: np.ndarray = box_filter_mean(src_f, radius)
-    mean_gg: np.ndarray = box_filter_mean(guide_f * guide_f, radius)
-    mean_gs: np.ndarray = box_filter_mean(guide_f * src_f, radius)
+    indices: BoxFilterIndex = _prepare_box_filter_index(guide_f.shape[0], guide_f.shape[1], radius)
+    mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices)
+    mean_src: np.ndarray = box_filter_mean_with_indices(src_f, indices)
+    mean_gg: np.ndarray = box_filter_mean_with_indices(guide_f * guide_f, indices)
+    mean_gs: np.ndarray = box_filter_mean_with_indices(guide_f * src_f, indices)
 
     var_g: np.ndarray = mean_gg - mean_guide * mean_guide
     cov_gs: np.ndarray = mean_gs - mean_guide * mean_src
@@ -116,8 +135,8 @@ def guided_filter(
     a: np.ndarray = cov_gs / (var_g + np.float32(eps))
     b: np.ndarray = mean_src - a * mean_guide
 
-    mean_a: np.ndarray = box_filter_mean(a, radius)
-    mean_b: np.ndarray = box_filter_mean(b, radius)
+    mean_a: np.ndarray = box_filter_mean_with_indices(a, indices)
+    mean_b: np.ndarray = box_filter_mean_with_indices(b, indices)
 
     q: np.ndarray = mean_a * guide_f + mean_b
     return q.astype(np.float32)

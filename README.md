@@ -1,6 +1,6 @@
 # Stereo Matching 使用說明
 
-本專案實作了基於 WCT (Weighted Census Transform) + Guided Image Filter + WTA 的立體匹配演算法。
+本專案實作了基於 WCT (Weighted Census Transform) + 可選擇濾波器 + WTA 的立體匹配演算法。
 
 ## 安裝依賴
 
@@ -30,7 +30,12 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--base_weight`: WCT 基準權重（預設：8.0）
 - `--guided_radius`: Guided Filter 視窗半徑（預設：3）
 - `--guided_eps`: Guided Filter 正則化項（預設：1e-3）
+- `--filter`: 聚合濾波器類型（guided, median, gaussian, bilateral）
+- `--median_radius`: Median Filter 視窗半徑（預設：3）
+- `--gaussian_sigma`: Gaussian sigma（預設：1.0）
+- `--bilateral_sigma`: Bilateral sigma（預設：1.0）
 - `--output`: 輸出視差圖路徑（PNG 格式，可選）
+- `--output_color`: 輸出彩色視差圖路徑（PNG 格式，可選）
 - `--output_npy`: 輸出視差 numpy 陣列路徑（.npy 格式，可選）
 - `--progress`: 顯示簡單進度（可選）
 
@@ -39,6 +44,9 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 ```bash
 # 基本使用
 python stereo.py --left left.png --right right.png --dmax 64 --output disparity.png
+
+# 輸出彩色視差圖
+python stereo.py --left left.png --right right.png --dmax 64 --output_color disparity_color.png
 
 # 完整參數範例
 python stereo.py \
@@ -49,7 +57,12 @@ python stereo.py \
   --base_weight 8.0 \
   --guided_radius 3 \
   --guided_eps 0.001 \
+  --filter guided \
+  --median_radius 3 \
+  --gaussian_sigma 1.0 \
+  --bilateral_sigma 1.0 \
   --output disparity.png \
+  --output_color disparity_color.png \
   --output_npy disparity.npy \
   --progress
 ```
@@ -79,6 +92,10 @@ disparity, min_cost = compute_disparity(
     base_weight=8.0,
     guided_radius=3,
     guided_eps=1e-3,
+    filter_type="guided",
+    median_radius=3,
+    gaussian_sigma=1.0,
+    bilateral_sigma=1.0,
 )
 
 # disparity: 視差圖，形狀為 (H, W)，dtype 為 int32
@@ -107,12 +124,16 @@ dsi = compute_wct_cost_volume(
     base_weight=8.0,
 )
 
-# 步驟 2: Guided Filter 聚合
+# 步驟 2: 濾波器聚合
 aggregated = aggregate_cost_volume(
     dsi=dsi,
     guide=left_gray,
-    radius=3,
-    eps=1e-3,
+    guided_radius=3,
+    guided_eps=1e-3,
+    filter_type="guided",
+    median_radius=3,
+    gaussian_sigma=1.0,
+    bilateral_sigma=1.0,
 )
 
 # 步驟 3: WTA 輸出視差
@@ -166,6 +187,16 @@ mean = box_filter_mean(image, radius=3)
 filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=1e-3)
 ```
 
+**Filtering (`filters.py`)**
+
+```python
+from filters import median_filter, gaussian_filter, bilateral_filter
+
+median = median_filter(cost_layer, radius=3)
+gaussian = gaussian_filter(cost_layer, sigma=1.0)
+bilateral = bilateral_filter(cost_layer, sigma=1.0)
+```
+
 ## 模組說明
 
 ### `stereo_io.py`
@@ -183,8 +214,13 @@ filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=1e-3)
 - `box_filter_mean(image, radius)`: Box filter 區域平均
 - `guided_filter(guide, src, radius, eps)`: Guided Image Filter
 
+### `filters.py`
+- `median_filter(image, radius)`: Median Filter
+- `gaussian_filter(image, sigma)`: Gaussian Filter
+- `bilateral_filter(image, sigma)`: Bilateral Filter
+
 ### `stereo.py`
-- `aggregate_cost_volume(dsi, guide, radius, eps, progress_callback=None)`: 對 cost volume 做聚合
+- `aggregate_cost_volume(...)`: 對 cost volume 做聚合
 - `winner_take_all(cost_volume)`: WTA 輸出視差
 - `compute_disparity(...)`: 完整流程函式
 
@@ -199,6 +235,7 @@ filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=1e-3)
 ## 輸出說明
 
 - **視差圖 (disparity)**: 每個像素的視差值，範圍為 0 到 dmax-1
+- **彩色視差圖**: 以 Jet 色盤呈現視差分佈，便於視覺化
 - **最小 cost 圖 (min_cost)**: 可用於除錯，觀察哪些區域匹配困難
 
 ## 注意事項
@@ -210,6 +247,7 @@ filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=1e-3)
 
 ## Middlebury 2014 stereo dataset description
 
+```
 Each dataset consists of 2 views taken under several different illuminations and exposures. The files are organized as follows:
 SCENE-{perfect,imperfect}/     -- each scene comes with perfect and imperfect calibration (see paper)
   ambient/                     -- directory of all input views under ambient lighting
@@ -224,3 +262,4 @@ SCENE-{perfect,imperfect}/     -- each scene comes with perfect and imperfect ca
   disp{0,1}-n.png              -- left and right GT number of samples (* perfect only)
   disp{0,1}-sd.pfm             -- left and right GT sample standard deviations (* perfect only)
   disp{0,1}y.pfm               -- left and right GT y-disparities (* imperfect only)
+```
