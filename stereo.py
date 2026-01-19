@@ -12,7 +12,7 @@ from PIL import Image
 
 from census import compute_wct_cost_volume
 from filters import bilateral_filter, gaussian_filter, median_filter
-from guided_filter import guided_filter
+from guided_filter import GuidedFilterPrecomputed, guided_filter_with_precompute, prepare_guided_filter
 from stereo_io import ensure_same_shape, read_image, to_gray
 
 DEFAULT_WCT_RADIUS: int = 4
@@ -93,11 +93,17 @@ def aggregate_cost_volume(
     if filter_key not in supported:
         raise ValueError(f"filter_type 必須為 {supported} 其中之一。")
 
+    guided_cache: Optional[GuidedFilterPrecomputed] = None
+    if filter_key == "guided":
+        guided_cache = prepare_guided_filter(guide, guided_radius, guided_eps)
+
     for d in range(dmax):
         layer: np.ndarray = dsi[:, :, d]
         if filter_key == "guided":
-            filtered: np.ndarray = guided_filter(guide, layer, guided_radius, guided_eps)
-            label: str = "Guided Filter"
+            if guided_cache is None:
+                raise RuntimeError("guided_cache 不可為 None。")
+            filtered = guided_filter_with_precompute(guided_cache, layer)
+            label = "Guided Filter"
         elif filter_key == "median":
             filtered = median_filter(
                 layer,
@@ -117,6 +123,89 @@ def aggregate_cost_volume(
             progress_callback(d + 1, dmax, label)
 
     return aggregated
+
+
+def aggregate_and_wta(
+    dsi: np.ndarray,
+    guide: np.ndarray,
+    guided_radius: int,
+    guided_eps: float,
+    filter_type: str = DEFAULT_FILTER_TYPE,
+    median_radius: int = DEFAULT_MEDIAN_RADIUS,
+    median_method: str = DEFAULT_MEDIAN_METHOD,
+    median_block_rows: int = DEFAULT_MEDIAN_BLOCK_ROWS,
+    gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
+    bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """逐層聚合並即時更新 WTA，避免建立完整聚合 cost volume。
+
+    參數:
+        dsi: 原始 cost volume，形狀為 (H, W, D)。
+        guide: 引導影像（灰階）。
+        guided_radius: Guided Filter 視窗半徑。
+        guided_eps: 正則化項。
+        filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
+        median_radius: Median Filter 視窗半徑。
+        median_method: Median Filter 計算方法（auto, scipy, vectorized, naive）。
+        median_block_rows: Median Filter 分塊列數。
+        gaussian_sigma: Gaussian Filter 標準差。
+        bilateral_sigma: Bilateral Filter 標準差。
+
+    回傳:
+        (disparity, min_cost)。
+    """
+    if dsi.ndim != 3:
+        raise ValueError("dsi 必須為 3D (H, W, D)。")
+    if guide.ndim != 2:
+        raise ValueError("guide 必須為 2D 灰階影像。")
+    if dsi.shape[0] != guide.shape[0] or dsi.shape[1] != guide.shape[1]:
+        raise ValueError("dsi 與 guide 尺寸不一致。")
+
+    height: int = dsi.shape[0]
+    width: int = dsi.shape[1]
+    dmax: int = dsi.shape[2]
+    min_cost: np.ndarray = np.full((height, width), np.inf, dtype=np.float32)
+    disparity: np.ndarray = np.zeros((height, width), dtype=np.int32)
+    filter_key: str = filter_type.strip().lower()
+    supported: Tuple[str, ...] = ("guided", "median", "gaussian", "bilateral")
+    if filter_key not in supported:
+        raise ValueError(f"filter_type 必須為 {supported} 其中之一。")
+
+    guided_cache: Optional[GuidedFilterPrecomputed] = None
+    if filter_key == "guided":
+        guided_cache = prepare_guided_filter(guide, guided_radius, guided_eps)
+
+    for d in range(dmax):
+        layer: np.ndarray = dsi[:, :, d]
+        if filter_key == "guided":
+            if guided_cache is None:
+                raise RuntimeError("guided_cache 不可為 None。")
+            filtered = guided_filter_with_precompute(guided_cache, layer)
+            label = "Guided Filter"
+        elif filter_key == "median":
+            filtered = median_filter(
+                layer,
+                median_radius,
+                method=median_method,
+                block_rows=median_block_rows,
+            )
+            label = "Median Filter"
+        elif filter_key == "gaussian":
+            filtered = gaussian_filter(layer, gaussian_sigma)
+            label = "Gaussian Filter"
+        else:
+            filtered = bilateral_filter(layer, bilateral_sigma)
+            label = "Bilateral Filter"
+
+        better: np.ndarray = filtered < min_cost
+        if np.any(better):
+            min_cost = np.where(better, filtered, min_cost)
+            disparity[better] = d
+        if progress_callback is not None:
+            progress_callback(d + 1, dmax, label)
+
+    return disparity, min_cost
 
 
 def winner_take_all(cost_volume: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -181,7 +270,7 @@ def compute_disparity(
         base_weight=base_weight,
         progress_callback=progress_callback,
     )
-    aggregated: np.ndarray = aggregate_cost_volume(
+    disparity, min_cost = aggregate_and_wta(
         dsi,
         left_gray,
         guided_radius,
@@ -194,7 +283,6 @@ def compute_disparity(
         bilateral_sigma=bilateral_sigma,
         progress_callback=progress_callback,
     )
-    disparity, min_cost = winner_take_all(aggregated)
     return disparity, min_cost
 
 

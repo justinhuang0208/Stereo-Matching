@@ -94,6 +94,20 @@ def _prepare_box_filter_index(height: int, width: int, radius: int) -> BoxFilter
     return BoxFilterIndex(y0=y0, y1=y1, x0=x0, x1=x1, area=area.astype(np.float32))
 
 
+@dataclass(frozen=True)
+class GuidedFilterPrecomputed:
+    """Guided Filter 的預先計算結果。"""
+
+    guide_f: np.ndarray
+    indices: BoxFilterIndex
+    mean_guide: np.ndarray
+    mean_gg: np.ndarray
+    var_g: np.ndarray
+    radius: int
+    eps: float
+    use_numba: bool
+
+
 def _box_sum_from_integral(
     integral: np.ndarray,
     indices: BoxFilterIndex,
@@ -182,6 +196,79 @@ def box_filter_mean_with_indices(
     return sum_region / indices.area
 
 
+def prepare_guided_filter(
+    guide: np.ndarray,
+    radius: int,
+    eps: float,
+    use_numba: bool = True,
+) -> GuidedFilterPrecomputed:
+    """預先計算 Guided Filter 所需的 guide 統計量。
+
+    參數:
+        guide: 引導影像（灰階）。
+        radius: 視窗半徑。
+        eps: 正則化項。
+        use_numba: 是否啟用 Numba JIT。
+
+    回傳:
+        GuidedFilterPrecomputed，包含預先計算的統計量。
+    """
+    if guide.ndim != 2:
+        raise ValueError("guide 必須為 2D。")
+    if radius <= 0:
+        raise ValueError("radius 必須為正整數。")
+    if eps <= 0:
+        raise ValueError("eps 必須為正值。")
+    guide_f: np.ndarray = guide.astype(np.float32)
+    indices: BoxFilterIndex = _prepare_box_filter_index(guide_f.shape[0], guide_f.shape[1], radius)
+    mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices, use_numba=use_numba)
+    mean_gg: np.ndarray = box_filter_mean_with_indices(guide_f * guide_f, indices, use_numba=use_numba)
+    var_g: np.ndarray = mean_gg - mean_guide * mean_guide
+    return GuidedFilterPrecomputed(
+        guide_f=guide_f,
+        indices=indices,
+        mean_guide=mean_guide,
+        mean_gg=mean_gg,
+        var_g=var_g,
+        radius=radius,
+        eps=float(eps),
+        use_numba=use_numba,
+    )
+
+
+def guided_filter_with_precompute(
+    precomputed: GuidedFilterPrecomputed,
+    src: np.ndarray,
+) -> np.ndarray:
+    """使用預先計算的 guide 統計量執行 Guided Filter。
+
+    參數:
+        precomputed: GuidedFilterPrecomputed。
+        src: 輸入影像（要被濾波的 cost）。
+
+    回傳:
+        濾波後影像，形狀為 (H, W)。
+    """
+    if src.ndim != 2:
+        raise ValueError("src 必須為 2D。")
+    if src.shape != precomputed.guide_f.shape:
+        raise ValueError("src 與 guide 尺寸必須一致。")
+    src_f: np.ndarray = src.astype(np.float32)
+    mean_src: np.ndarray = box_filter_mean_with_indices(src_f, precomputed.indices, use_numba=precomputed.use_numba)
+    mean_gs: np.ndarray = box_filter_mean_with_indices(
+        precomputed.guide_f * src_f,
+        precomputed.indices,
+        use_numba=precomputed.use_numba,
+    )
+    cov_gs: np.ndarray = mean_gs - precomputed.mean_guide * mean_src
+    a: np.ndarray = cov_gs / (precomputed.var_g + np.float32(precomputed.eps))
+    b: np.ndarray = mean_src - a * precomputed.mean_guide
+    mean_a: np.ndarray = box_filter_mean_with_indices(a, precomputed.indices, use_numba=precomputed.use_numba)
+    mean_b: np.ndarray = box_filter_mean_with_indices(b, precomputed.indices, use_numba=precomputed.use_numba)
+    q: np.ndarray = mean_a * precomputed.guide_f + mean_b
+    return q.astype(np.float32)
+
+
 def guided_filter(
     guide: np.ndarray,
     src: np.ndarray,
@@ -203,30 +290,5 @@ def guided_filter(
     """
     if guide.shape != src.shape:
         raise ValueError("guide 與 src 尺寸必須一致。")
-    if guide.ndim != 2:
-        raise ValueError("guide 與 src 必須為 2D。")
-    if radius <= 0:
-        raise ValueError("radius 必須為正整數。")
-    if eps <= 0:
-        raise ValueError("eps 必須為正值。")
-
-    guide_f: np.ndarray = guide.astype(np.float32)
-    src_f: np.ndarray = src.astype(np.float32)
-
-    indices: BoxFilterIndex = _prepare_box_filter_index(guide_f.shape[0], guide_f.shape[1], radius)
-    mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices, use_numba=use_numba)
-    mean_src: np.ndarray = box_filter_mean_with_indices(src_f, indices, use_numba=use_numba)
-    mean_gg: np.ndarray = box_filter_mean_with_indices(guide_f * guide_f, indices, use_numba=use_numba)
-    mean_gs: np.ndarray = box_filter_mean_with_indices(guide_f * src_f, indices, use_numba=use_numba)
-
-    var_g: np.ndarray = mean_gg - mean_guide * mean_guide
-    cov_gs: np.ndarray = mean_gs - mean_guide * mean_src
-
-    a: np.ndarray = cov_gs / (var_g + np.float32(eps))
-    b: np.ndarray = mean_src - a * mean_guide
-
-    mean_a: np.ndarray = box_filter_mean_with_indices(a, indices, use_numba=use_numba)
-    mean_b: np.ndarray = box_filter_mean_with_indices(b, indices, use_numba=use_numba)
-
-    q: np.ndarray = mean_a * guide_f + mean_b
-    return q.astype(np.float32)
+    precomputed: GuidedFilterPrecomputed = prepare_guided_filter(guide, radius, eps, use_numba=use_numba)
+    return guided_filter_with_precompute(precomputed, src)
