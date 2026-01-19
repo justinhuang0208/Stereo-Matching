@@ -31,15 +31,16 @@ def to_gray(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         gray: np.ndarray = image.astype(np.float32)
     elif image.ndim == 3 and image.shape[2] >= 3:
-        rgb: np.ndarray = image[..., :3].astype(np.float32)
+        rgb = image[..., :3].astype(np.float32)
         gray = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
     else:
-        raise ValueError("不支援的影像形狀，需為 HxW 或 HxWx3/4。")
+        raise ValueError("不支援的影像形狀")
 
-    if gray.max() > 1.0:
-        gray = gray / 255.0
+    if np.issubdtype(image.dtype, np.integer):
+        gray = gray / float(np.iinfo(image.dtype).max)
 
     return gray.astype(np.float32)
+
 
 
 def ensure_same_shape(left: np.ndarray, right: np.ndarray) -> Tuple[int, int]:
