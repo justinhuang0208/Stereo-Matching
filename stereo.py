@@ -43,8 +43,11 @@ def _print_progress(current: int, total: int, label: str) -> None:
         raise ValueError("total 必須為正整數。")
     clamped_current: int = min(max(current, 0), total)
     percent: float = (clamped_current / float(total)) * 100.0
-    message: str = f"\r{label}: {clamped_current}/{total} ({percent:5.1f}%)"
-    sys.stdout.write(message)
+    message: str = f"{label}: {clamped_current}/{total} ({percent:5.1f}%)"
+    if clamped_current >= total:
+        sys.stdout.write(f"\r{message}\n")
+    else:
+        sys.stdout.write(f"\r{message}")
     sys.stdout.flush()
 
 
