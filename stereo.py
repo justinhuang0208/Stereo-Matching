@@ -13,7 +13,7 @@ from PIL import Image
 from census import compute_wct_cost_volume
 from filters import bilateral_filter, gaussian_filter, median_filter
 from guided_filter import GuidedFilterPrecomputed, guided_filter_with_precompute, prepare_guided_filter
-from stereo_io import ensure_same_shape, read_image, to_gray
+from stereo_io import ensure_same_shape, read_image, read_pfm, save_disparity_npz, to_gray
 
 DEFAULT_WCT_RADIUS: int = 4
 DEFAULT_BASE_WEIGHT: float = 8.0
@@ -25,6 +25,7 @@ DEFAULT_MEDIAN_METHOD: str = "auto"
 DEFAULT_MEDIAN_BLOCK_ROWS: int = 128
 DEFAULT_GAUSSIAN_SIGMA: float = 1.0
 DEFAULT_BILATERAL_SIGMA: float = 1.0
+DEFAULT_BAD_THRESHOLD: float = 1.0
 
 
 def _print_progress(current: int, total: int, label: str) -> None:
@@ -375,6 +376,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
     parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
+    parser.add_argument("--eval", action="store_true", help="是否與 GT 進行評估")
+    parser.add_argument("--gt", type=str, default="", help="GT PFM 檔案路徑")
+    parser.add_argument("--bad_threshold", type=float, default=DEFAULT_BAD_THRESHOLD, help="Bad pixel 閾值")
     parser.add_argument("--progress", action="store_true", help="顯示簡單進度")
     return parser.parse_args()
 
@@ -409,6 +413,8 @@ def _build_run_metadata(
     run_dir: Path,
     output_gray: Path,
     output_color: Path,
+    output_npz: Path,
+    output_metrics: Optional[Path],
 ) -> Dict[str, str]:
     """建立本次執行的參數摘要。
 
@@ -417,6 +423,8 @@ def _build_run_metadata(
         run_dir: 本次執行資料夾。
         output_gray: 灰階視差圖輸出路徑。
         output_color: 彩色視差圖輸出路徑。
+        output_npz: 原始資料輸出路徑。
+        output_metrics: 評估結果輸出路徑。
 
     回傳:
         參數摘要字典。
@@ -437,9 +445,14 @@ def _build_run_metadata(
         "median_block_rows": str(args.median_block_rows),
         "gaussian_sigma": str(args.gaussian_sigma),
         "bilateral_sigma": str(args.bilateral_sigma),
+        "bad_threshold": str(args.bad_threshold),
+        "eval": str(bool(args.eval)),
+        "gt": str(args.gt),
         "progress": str(bool(args.progress)),
         "output_disparity_png": str(output_gray),
         "output_disparity_color_png": str(output_color),
+        "output_disparity_npz": str(output_npz),
+        "output_metrics_json": "" if output_metrics is None else str(output_metrics),
     }
 
 
@@ -457,13 +470,71 @@ def _write_run_metadata(path: Path, metadata: Dict[str, str]) -> None:
         json.dump(metadata, handler, ensure_ascii=True, indent=2, sort_keys=True)
 
 
+def _compute_pbm_rms(
+    disparity: np.ndarray,
+    ground_truth: np.ndarray,
+    bad_threshold: float,
+) -> Dict[str, float]:
+    """計算 PBM 與 RMS 指標。
+
+    參數:
+        disparity: 估計視差圖。
+        ground_truth: GT 視差圖（PFM）。
+        bad_threshold: bad pixel 閾值。
+
+    回傳:
+        包含 PBM 與 RMS 的字典。
+    """
+    if disparity.shape != ground_truth.shape:
+        raise ValueError("disparity 與 ground_truth 尺寸不一致。")
+    if disparity.ndim != 2 or ground_truth.ndim != 2:
+        raise ValueError("disparity 與 ground_truth 必須為 2D。")
+    if bad_threshold <= 0:
+        raise ValueError("bad_threshold 必須為正數。")
+
+    gt_valid: np.ndarray = np.isfinite(ground_truth) & (ground_truth > 0)
+    valid_count: int = int(np.sum(gt_valid))
+    if valid_count == 0:
+        raise ValueError("ground_truth 沒有可用的有效像素。")
+
+    disparity_float: np.ndarray = disparity.astype(np.float32)
+    gt_float: np.ndarray = ground_truth.astype(np.float32)
+    diff: np.ndarray = np.abs(disparity_float - gt_float)
+    diff_valid: np.ndarray = diff[gt_valid]
+    bad_pixels: np.ndarray = diff_valid > bad_threshold
+    pbm: float = float(np.mean(bad_pixels) * 100.0)
+    rms: float = float(np.sqrt(np.mean(diff_valid ** 2)))
+    return {
+        "pbm": pbm,
+        "rms": rms,
+        "bad_threshold": float(bad_threshold),
+        "valid_pixel_count": float(valid_count),
+    }
+
+
+def _write_metrics(path: Path, metrics: Dict[str, float]) -> None:
+    """輸出評估指標到 JSON 檔案。"""
+    with path.open("w", encoding="utf-8") as handler:
+        json.dump(metrics, handler, ensure_ascii=True, indent=2, sort_keys=True)
+
+
+def _validate_eval_args(args: argparse.Namespace) -> None:
+    """驗證評估相關 CLI 參數。"""
+    if args.eval and not args.gt:
+        raise ValueError("使用 --eval 時必須提供 --gt 路徑。")
+    if args.gt and not args.eval:
+        raise ValueError("提供 --gt 時必須同時加上 --eval。")
+
+
 def main() -> None:
     """簡易驗證入口：讀入左右影像並輸出視差圖。"""
     args: argparse.Namespace = _parse_args()
+    _validate_eval_args(args)
     timestamp: str = datetime.now().strftime("%Y%m%d%H%M")
     run_dir: Path = _create_run_directory("result", timestamp)
     output_gray: Path = run_dir / "disparity.png"
     output_color: Path = run_dir / "disparity_color.png"
+    output_npz: Path = run_dir / "disparity.npz"
     left_img: np.ndarray = read_image(args.left)
     right_img: np.ndarray = read_image(args.right)
     left_gray: np.ndarray = to_gray(left_img)
@@ -488,7 +559,23 @@ def main() -> None:
 
     _save_disparity_image(disparity, args.dmax, str(output_gray))
     _save_disparity_color_image(disparity, args.dmax, str(output_color))
-    metadata: Dict[str, str] = _build_run_metadata(args, run_dir, output_gray, output_color)
+    save_disparity_npz(str(output_npz), disparity, min_cost)
+
+    output_metrics: Optional[Path] = None
+    if args.eval:
+        output_metrics = run_dir / "metrics.json"
+        gt_disp: np.ndarray = read_pfm(args.gt)
+        metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, args.bad_threshold)
+        _write_metrics(output_metrics, metrics)
+
+    metadata: Dict[str, str] = _build_run_metadata(
+        args,
+        run_dir,
+        output_gray,
+        output_color,
+        output_npz,
+        output_metrics,
+    )
     _write_run_metadata(run_dir / "params.json", metadata)
 
     _ = min_cost

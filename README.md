@@ -34,6 +34,9 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--median_radius`: Median Filter 視窗半徑（預設：3）
 - `--gaussian_sigma`: Gaussian sigma（預設：1.0）
 - `--bilateral_sigma`: Bilateral sigma（預設：1.0）
+- `--eval`: 是否與 GT 進行評估（預設：False）
+- `--gt`: GT PFM 檔案路徑（搭配 `--eval`）
+- `--bad_threshold`: Bad pixel 閾值（預設：1.0）
 - `--progress`: 顯示簡單進度（可選）
 
 #### 範例
@@ -56,6 +59,15 @@ python stereo.py \
   --gaussian_sigma 1.0 \
   --bilateral_sigma 1.0 \
   --progress
+
+# 含 GT 評估的範例
+python stereo.py \
+  --left im0.png \
+  --right im1.png \
+  --dmax 64 \
+  --eval \
+  --gt dataset/Motorcycle-perfect/disp0.pfm \
+  --bad_threshold 1.0
 ```
 
 ### 方法二：作為 Python 模組使用
@@ -228,8 +240,9 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 - **輸出資料夾**: 每次執行會輸出到 `result/<YYYYMMDDHHMM>`，同分鐘重複執行會自動加上 `_01`、`_02` 避免覆寫
 - **視差圖 (disparity.png)**: 每個像素的視差值，範圍為 0 到 dmax-1
 - **彩色視差圖 (disparity_color.png)**: 以 Jet 色盤呈現視差分佈，便於視覺化
+- **原始資料 (disparity.npz)**: `disparity` 與 `min_cost` 的原始陣列
 - **參數檔 (params.json)**: 這次執行的所有參數與輸出路徑
-- **最小 cost 圖 (min_cost)**: 可用於除錯，觀察哪些區域匹配困難
+- **評估結果 (metrics.json)**: 含 PBM 與 RMS 的評估結果（僅在啟用 `--eval` 時）
 
 ## 注意事項
 
@@ -237,6 +250,18 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 2. 影像會自動轉為灰階並正規化到 0~1
 3. 邊界處理：當 `(x-d) < 0` 或比較點超出範圍時，該 disparity 的 cost 會設為大值
 4. 所有函式都有完整的型別標註與文件說明
+
+## 原始資料與 PFM 轉換
+
+可使用 `convert.py` 進行 `.npz` 與 `.pfm` 的互轉：
+
+```bash
+# NPZ -> PFM
+python convert.py --input result/202601191214/disparity.npz --output disparity.pfm --mode npz2pfm
+
+# PFM -> NPZ
+python convert.py --input dataset/Motorcycle-perfect/disp0.pfm --output disp0.npz --mode pfm2npz
+```
 
 ## Middlebury 2014 stereo dataset description
 

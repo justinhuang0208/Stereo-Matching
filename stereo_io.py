@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 from PIL import Image
@@ -60,3 +60,169 @@ def ensure_same_shape(left: np.ndarray, right: np.ndarray) -> Tuple[int, int]:
     height: int = int(left.shape[0])
     width: int = int(left.shape[1])
     return height, width
+
+
+def read_pfm(path: str) -> np.ndarray:
+    """讀取 PFM 檔案並回傳 float32 陣列。
+
+    參數:
+        path: PFM 檔案路徑。
+
+    回傳:
+        影像陣列，灰階為 (H, W)，彩色為 (H, W, 3)。
+    """
+    with open(path, "rb") as handler:
+        header: str = handler.readline().decode("ascii").strip()
+        if header not in ("PF", "Pf"):
+            raise ValueError("PFM header 必須為 PF 或 Pf。")
+        color: bool = header == "PF"
+
+        def _read_non_empty_line() -> str:
+            line: str = handler.readline().decode("ascii")
+            while line:
+                stripped: str = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    return stripped
+                line = handler.readline().decode("ascii")
+            raise ValueError("PFM 內容不完整。")
+
+        dim_line: str = _read_non_empty_line()
+        width_str, height_str = dim_line.split()
+        width: int = int(width_str)
+        height: int = int(height_str)
+        scale_line: str = _read_non_empty_line()
+        scale: float = float(scale_line)
+        endian: str = "<" if scale < 0 else ">"
+        channels: int = 3 if color else 1
+        count: int = width * height * channels
+        data: np.ndarray = np.fromfile(handler, dtype=f"{endian}f", count=count)
+        if data.size != count:
+            raise ValueError("PFM 資料大小不正確。")
+        if color:
+            image: np.ndarray = data.reshape((height, width, 3))
+        else:
+            image = data.reshape((height, width))
+        image = np.flipud(image).astype(np.float32)
+        return image
+
+
+def write_pfm(path: str, image: np.ndarray, scale: float = 1.0) -> None:
+    """將 float32 陣列寫入 PFM 檔案。
+
+    參數:
+        path: 輸出 PFM 檔案路徑。
+        image: 影像陣列，形狀為 (H, W) 或 (H, W, 3)。
+        scale: 實數縮放值，正負號決定 endian。
+
+    回傳:
+        None。
+    """
+    if image.ndim not in (2, 3):
+        raise ValueError("PFM 影像維度必須為 2 或 3。")
+    if image.ndim == 3 and image.shape[2] != 3:
+        raise ValueError("彩色 PFM 必須為 3 通道。")
+
+    color: bool = image.ndim == 3
+    height: int = int(image.shape[0])
+    width: int = int(image.shape[1])
+    header: str = "PF" if color else "Pf"
+    data: np.ndarray = np.flipud(image).astype(np.float32)
+    endian: str = "<" if data.dtype.byteorder in ("<", "=") else ">"
+    scale_value: float = -abs(scale) if endian == "<" else abs(scale)
+
+    with open(path, "wb") as handler:
+        handler.write(f"{header}\n".encode("ascii"))
+        handler.write(f"{width} {height}\n".encode("ascii"))
+        handler.write(f"{scale_value}\n".encode("ascii"))
+        data.tofile(handler)
+
+
+def save_npz(path: str, arrays: Dict[str, np.ndarray]) -> None:
+    """將多個陣列儲存為 NPZ 檔案。
+
+    參數:
+        path: 輸出 NPZ 檔案路徑。
+        arrays: 欲輸出的陣列字典。
+
+    回傳:
+        None。
+    """
+    if not arrays:
+        raise ValueError("arrays 不可為空。")
+    np.savez_compressed(path, **arrays)
+
+
+def load_npz(path: str) -> Dict[str, np.ndarray]:
+    """讀取 NPZ 檔案並回傳陣列字典。
+
+    參數:
+        path: NPZ 檔案路徑。
+
+    回傳:
+        陣列字典。
+    """
+    with np.load(path) as data:
+        return {key: data[key] for key in data.files}
+
+
+def save_disparity_npz(path: str, disparity: np.ndarray, min_cost: np.ndarray) -> None:
+    """儲存 disparity 與 min_cost 至 NPZ。
+
+    參數:
+        path: 輸出 NPZ 檔案路徑。
+        disparity: 視差圖陣列。
+        min_cost: 最小成本圖陣列。
+
+    回傳:
+        None。
+    """
+    if disparity.shape != min_cost.shape:
+        raise ValueError("disparity 與 min_cost 尺寸必須一致。")
+    save_npz(path, {"disparity": disparity, "min_cost": min_cost})
+
+
+def load_disparity_npz(path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """讀取 disparity 與 min_cost 的 NPZ 檔案。
+
+    參數:
+        path: NPZ 檔案路徑。
+
+    回傳:
+        (disparity, min_cost)。
+    """
+    data: Dict[str, np.ndarray] = load_npz(path)
+    if "disparity" not in data or "min_cost" not in data:
+        raise ValueError("NPZ 必須包含 disparity 與 min_cost。")
+    return data["disparity"], data["min_cost"]
+
+
+def convert_npz_to_pfm(npz_path: str, pfm_path: str, key: str = "disparity") -> None:
+    """將 NPZ 內指定 key 的陣列轉為 PFM。
+
+    參數:
+        npz_path: NPZ 檔案路徑。
+        pfm_path: 輸出 PFM 檔案路徑。
+        key: NPZ 內的陣列 key。
+
+    回傳:
+        None。
+    """
+    data: Dict[str, np.ndarray] = load_npz(npz_path)
+    if key not in data:
+        raise ValueError(f"NPZ 不包含 key: {key}")
+    write_pfm(pfm_path, data[key])
+
+
+def convert_pfm_to_npz(pfm_path: str, npz_path: str, key: str = "disparity") -> None:
+    """將 PFM 轉為 NPZ，指定 key 儲存。
+
+    參數:
+        pfm_path: PFM 檔案路徑。
+        npz_path: 輸出 NPZ 檔案路徑。
+        key: NPZ 內的陣列 key。
+
+    回傳:
+        None。
+    """
+    data: np.ndarray = read_pfm(pfm_path)
+    save_npz(npz_path, {key: data})
