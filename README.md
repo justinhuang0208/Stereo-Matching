@@ -237,7 +237,7 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 
 ## 輸出說明
 
-- **輸出資料夾**: 每次執行會輸出到 `result/<YYYYMMDDHHMM>`，同分鐘重複執行會自動加上 `_01`、`_02` 避免覆寫
+- **輸出資料夾**: 每次執行會輸出到 `result/<YYYYMMDDHHMMSS>`，同秒重複執行會自動加上 `_01`、`_02` 避免覆寫，且最後六碼維持為 `HHMMSS`
 - **視差圖 (disparity.png)**: 每個像素的視差值，範圍為 0 到 dmax-1
 - **彩色視差圖 (disparity_color.png)**: 以 Jet 色盤呈現視差分佈，便於視覺化
 - **原始資料 (disparity.npz)**: `disparity` 與 `min_cost` 的原始陣列

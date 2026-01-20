@@ -391,20 +391,27 @@ def _create_run_directory(base_dir: str, timestamp: str) -> Path:
 
     參數:
         base_dir: 輸出根資料夾。
-        timestamp: 時間字串（YYYYMMDDHHMM）。
+        timestamp: 時間字串（YYYYMMDDHHMMSS）。
+            若遇到同名資料夾，會在日期與時間之間插入序號，確保名稱最後六碼為 HHMMSS。
 
     回傳:
         本次執行資料夾 Path。
     """
     root: Path = Path(base_dir)
     root.mkdir(parents=True, exist_ok=True)
-    run_dir: Path = root / timestamp
+    date_part: str = timestamp[:-6]
+    time_part: str = timestamp[-6:]
+    run_dir: Path = root / f"{date_part}{time_part}"
     if not run_dir.exists():
         run_dir.mkdir(parents=True, exist_ok=False)
         return run_dir
     suffix: int = 1
     while True:
-        candidate: Path = root / f"{timestamp}_{suffix:02d}"
+        if date_part:
+            candidate_name: str = f"{date_part}_{suffix:02d}_{time_part}"
+        else:
+            candidate_name = f"{suffix:02d}_{time_part}"
+        candidate: Path = root / candidate_name
         if not candidate.exists():
             candidate.mkdir(parents=True, exist_ok=False)
             return candidate
@@ -533,7 +540,7 @@ def main() -> None:
     """簡易驗證入口：讀入左右影像並輸出視差圖。"""
     args: argparse.Namespace = _parse_args()
     _validate_eval_args(args)
-    timestamp: str = datetime.now().strftime("%Y%m%d%H%M")
+    timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S")
     run_dir: Path = _create_run_directory("result", timestamp)
     output_gray: Path = run_dir / "disparity.png"
     output_color: Path = run_dir / "disparity_color.png"

@@ -60,7 +60,7 @@ def _compute_valid_bounds_numba(
     width: int,
     offsets: np.ndarray,
 ) -> Tuple[int, int, int, int]:
-    """以 Numba 計算所有位移都有效的中心像素範圍。"""
+    """以 Numba 計算所有位移都有效的中心像素範圍，確保在此範圍內的任何像素作為中心點時，其對應的所有鄰居像素都在影像內部。。"""
     y_start: int = 0
     y_end: int = int(height)
     x_start: int = 0
@@ -85,7 +85,7 @@ def _offsets_to_array(offsets: Sequence[Tuple[int, int, int]]) -> np.ndarray:
 
 
 @_NUMBA_NJIT
-def _compute_census_bits_numba(
+def compute_census_bits_numba(
     image: np.ndarray,
     offsets: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -115,26 +115,6 @@ def _compute_census_bits_numba(
                 x_nbr: int = x + dx
                 bits[idx, y, x] = image[y_nbr, x_nbr] > image[y, x]
     return bits, valid_mask
-
-
-def compute_census_bits(
-    image: np.ndarray,
-    offsets: Sequence[Tuple[int, int, int]],
-) -> Tuple[np.ndarray, np.ndarray]:
-    """計算 Census bits 與有效像素遮罩。
-
-    參數:
-        image: 灰階影像陣列。
-        offsets: 位移清單，包含 (dy, dx, r)。
-    回傳:
-        (bits, valid_mask)
-        bits: 形狀 (N, H, W) 的布林陣列。
-        valid_mask: 形狀 (H, W) 的布林陣列，表示所有位移都有效的中心位置。
-    """
-    if image.ndim != 2:
-        raise ValueError("image 必須為 2D 灰階影像。")
-    offsets_array: np.ndarray = _offsets_to_array(offsets)
-    return _compute_census_bits_numba(image, offsets_array)
 
 
 def compute_wct_cost_volume(
@@ -169,9 +149,10 @@ def compute_wct_cost_volume(
     offsets: List[Tuple[int, int, int]] = generate_offsets(radius)
     weights: np.ndarray = compute_weights(offsets, base_weight)
     large_value: float = float(np.sum(weights))
+    offsets_array: np.ndarray = _offsets_to_array(offsets)
 
-    left_bits, left_valid = compute_census_bits(left, offsets)
-    right_bits, right_valid = compute_census_bits(right, offsets)
+    left_bits, left_valid = compute_census_bits_numba(left, offsets_array)
+    right_bits, right_valid = compute_census_bits_numba(right, offsets_array)
     if left_valid.shape != right_valid.shape:
         raise ValueError("left/right 影像尺寸不一致。")
 
