@@ -3,31 +3,15 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
-try:
-    import numba  # type: ignore[import-not-found]
-    _NUMBA_AVAILABLE: bool = True
-except ImportError:
-    numba = None
-    _NUMBA_AVAILABLE = False
+import numba
 
 
-def _get_numba_njit() -> Callable[[Callable[..., object]], Callable[..., object]]:
-    """取得 Numba njit decorator，若不可用則回傳 no-op。"""
-    if _NUMBA_AVAILABLE and numba is not None:
-        return numba.njit(cache=True, fastmath=False)
-
-    def _decorator(func: Callable[..., object]) -> Callable[..., object]:
-        return func
-
-    return _decorator
-
-
-_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = _get_numba_njit()
+_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(cache=True, fastmath=False)
 
 
 def _should_use_numba(use_numba: bool) -> bool:
     """判斷是否使用 Numba JIT。"""
-    return bool(use_numba and _NUMBA_AVAILABLE)
+    return bool(use_numba)
 
 
 def generate_offsets(radius: int = 4) -> List[Tuple[int, int, int]]:
