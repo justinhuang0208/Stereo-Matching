@@ -20,13 +20,13 @@ def read_image(path: str) -> np.ndarray:
 
 
 def to_gray(image: np.ndarray) -> np.ndarray:
-    """將影像轉為灰階 float32，並正規化到 0~1。
+    """將影像轉為灰階 float32，保持原始亮度範圍。
 
     參數:
         image: 輸入影像陣列，形狀為 HxW 或 HxWx3/4。
 
     回傳:
-        灰階影像陣列，dtype 為 float32，範圍 0~1。
+        灰階影像陣列，dtype 為 float32。
     """
     if image.ndim == 2:
         gray: np.ndarray = image.astype(np.float32)
@@ -35,9 +35,6 @@ def to_gray(image: np.ndarray) -> np.ndarray:
         gray = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
     else:
         raise ValueError("不支援的影像形狀")
-
-    if np.issubdtype(image.dtype, np.integer):
-        gray = gray / float(np.iinfo(image.dtype).max)
 
     return gray.astype(np.float32)
 

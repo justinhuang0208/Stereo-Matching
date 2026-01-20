@@ -18,7 +18,7 @@ from stereo_io import ensure_same_shape, read_image, read_pfm, save_disparity_np
 DEFAULT_WCT_RADIUS: int = 4
 DEFAULT_BASE_WEIGHT: float = 8.0
 DEFAULT_GUIDED_RADIUS: int = 3
-DEFAULT_GUIDED_EPS: float = 0.0154
+DEFAULT_GUIDED_EPS: float = 1000
 DEFAULT_FILTER_TYPE: str = "guided"
 DEFAULT_MEDIAN_RADIUS: int = 3
 DEFAULT_MEDIAN_METHOD: str = "auto"
