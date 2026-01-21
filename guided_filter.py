@@ -12,7 +12,14 @@ _NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.nj
 
 @_NUMBA_NJIT
 def _integral_image_numba(image: np.ndarray) -> np.ndarray:
-    """以 Numba 計算 integral image，回傳大小為 (H+1, W+1)。"""
+    """以 Numba 計算 integral image，回傳大小為 (H+1, W+1)。
+
+    參數:
+        image: 輸入 2D 影像。
+
+    回傳:
+        integral image，形狀為 (H+1, W+1)。
+    """
     height: int = int(image.shape[0])
     width: int = int(image.shape[1])
     integral: np.ndarray = np.zeros((height + 1, width + 1), dtype=np.float32)
@@ -34,21 +41,33 @@ def _integral_image_numba(image: np.ndarray) -> np.ndarray:
 class BoxFilterIndex:
     """Box filter 所需的索引與區域面積。"""
 
+    # center pixel 合法的 index 的高度上限與下限，以及寬度的上限與下限。
     y0: np.ndarray
     y1: np.ndarray
     x0: np.ndarray
     x1: np.ndarray
+    # 2D array of box filter area of each pixel
     area: np.ndarray
 
 
 def _prepare_box_filter_index(height: int, width: int, radius: int) -> BoxFilterIndex:
-    """預先計算 box filter 的索引與區域面積。"""
+    """預先計算 box filter 的索引與區域面積。
+
+    參數:
+        height: 影像高度。
+        width: 影像寬度。
+        radius: 視窗半徑。
+
+    回傳:
+        BoxFilterIndex，包含索引與區域面積。
+    """
     if height <= 0 or width <= 0:
         raise ValueError("height 與 width 必須為正整數。")
     if radius < 0:
         raise ValueError("radius 必須為非負整數。")
     ys: np.ndarray = np.arange(height)
     xs: np.ndarray = np.arange(width)
+    # np.clip(a, min, max) 會把陣列 a 裡的值限制在 [min, max] 範圍內
     y0: np.ndarray = np.clip(ys - radius, 0, height - 1)
     y1: np.ndarray = np.clip(ys + radius, 0, height - 1)
     x0: np.ndarray = np.clip(xs - radius, 0, width - 1)
@@ -78,7 +97,18 @@ def _box_sum_from_integral_numba(
     x0: np.ndarray,
     x1: np.ndarray,
 ) -> np.ndarray:
-    """以 Numba 計算 box sum，回傳形狀為 (H, W)。"""
+    """以 Numba 計算 box sum，回傳形狀為 (H, W)。
+
+    參數:
+        integral: integral image，形狀為 (H+1, W+1)。
+        y0: 每一列的起始索引。
+        y1: 每一列的結束索引。
+        x0: 每一欄的起始索引。
+        x1: 每一欄的結束索引。
+
+    回傳:
+        box sum 影像，形狀為 (H, W)。
+    """
     height: int = int(y0.shape[0])
     width: int = int(x0.shape[0])
     sum_region: np.ndarray = np.empty((height, width), dtype=np.float32)
@@ -115,7 +145,15 @@ def box_filter_mean_with_indices(
     image: np.ndarray,
     indices: BoxFilterIndex,
 ) -> np.ndarray:
-    """使用預先計算的索引來計算 box filter 的區域平均。"""
+    """使用預先計算的索引來計算 box filter 的區域平均。
+
+    參數:
+        image: 輸入 2D 影像。
+        indices: 預先計算的 box filter 索引。
+
+    回傳:
+        區域平均影像，形狀為 (H, W)。
+    """
     if image.ndim != 2:
         raise ValueError("image 必須為 2D。")
     image_f: np.ndarray = image.astype(np.float32, copy=False)

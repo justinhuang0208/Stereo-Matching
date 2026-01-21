@@ -125,7 +125,7 @@ disparity, min_cost = compute_disparity(
 ```python
 from stereo_io import read_image, to_gray
 from census import compute_wct_cost_volume
-from stereo import aggregate_cost_volume, winner_take_all
+from stereo import aggregate_and_wta
 
 # 讀取與轉灰階
 left_img = read_image("left.png")
@@ -142,8 +142,8 @@ dsi = compute_wct_cost_volume(
     base_weight=8.0,
 )
 
-# 步驟 2: 濾波器聚合
-aggregated = aggregate_cost_volume(
+# 步驟 2: 濾波聚合並 WTA
+disparity, min_cost = aggregate_and_wta(
     dsi=dsi,
     guide=left_gray,
     guided_radius=3,
@@ -153,9 +153,6 @@ aggregated = aggregate_cost_volume(
     gaussian_sigma=1.0,
     bilateral_sigma=1.0,
 )
-
-# 步驟 3: WTA 輸出視差
-disparity, min_cost = winner_take_all(aggregated)
 ```
 
 #### 單獨使用各模組
@@ -238,8 +235,7 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 - `bilateral_filter(image, sigma)`: Bilateral Filter
 
 ### `stereo.py`
-- `aggregate_cost_volume(...)`: 對 cost volume 做聚合
-- `winner_take_all(cost_volume)`: WTA 輸出視差
+- `aggregate_and_wta(...)`: 逐層聚合並即時 WTA 輸出視差
 - `compute_disparity(...)`: 完整流程函式
 
 ## 參數建議

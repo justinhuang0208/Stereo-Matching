@@ -60,7 +60,19 @@ def _compute_valid_bounds_numba(
     width: int,
     offsets: np.ndarray,
 ) -> Tuple[int, int, int, int]:
-    """以 Numba 計算所有位移都有效的中心像素範圍，確保在此範圍內的任何像素作為中心點時，其對應的所有鄰居像素都在影像內部。。"""
+    """以 Numba 計算所有位移都有效的中心像素範圍，確保在此範圍內的任何像素作為中心點時，其對應的所有鄰居像素都在影像內部。
+
+    Args:
+        height: 影像高度（像素數）。
+        width: 影像寬度（像素數）。
+        offsets: 位移陣列，形狀為 (N, 2) 的整數位移 (dy, dx)。
+
+    Returns:
+        y_start: 有效中心像素的起始列索引（含）。
+        y_end: 有效中心像素的結束列索引（不含）。
+        x_start: 有效中心像素的起始行索引（含）。
+        x_end: 有效中心像素的結束行索引（不含）。
+    """
     y_start: int = 0
     y_end: int = int(height)
     x_start: int = 0
@@ -89,7 +101,16 @@ def compute_census_bits_numba(
     image: np.ndarray,
     offsets: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """以 Numba 計算 Census bits 與有效遮罩。"""
+    """以 Numba 計算 Census bits 與有效遮罩。
+
+    Args:
+        image: 單通道影像，形狀為 (H, W)。
+        offsets: 位移陣列，形狀為 (N, 2) 的整數位移 (dy, dx)。
+
+    Returns:
+        bits: Census bits，形狀為 (N, H, W) 的布林陣列。
+        valid_mask: 中心像素有效遮罩，形狀為 (H, W) 的布林陣列。
+    """
     height: int = int(image.shape[0])
     width: int = int(image.shape[1])
     num_offsets: int = int(offsets.shape[0])
