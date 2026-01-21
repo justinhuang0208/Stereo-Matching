@@ -70,6 +70,21 @@ python stereo.py \
   --bad_threshold 1.0
 ```
 
+### 方法一補充：使用既有 NPZ 重新評估
+
+如果你已有輸出的 `disparity.npz`，可透過 `eval_npz.py` 重新指定 `bad_threshold` 進行評估：
+
+```bash
+# 基本使用
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --bad_threshold 2.0
+
+# 當 NPZ 的 key 不是 disparity 時
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --key my_disp --bad_threshold 1.0
+
+# 輸出評估結果到 JSON
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --bad_threshold 1.0 --output_json result/202601200157/metrics_custom.json
+```
+
 ### 方法二：作為 Python 模組使用
 
 #### 完整流程

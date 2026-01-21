@@ -528,6 +528,22 @@ def _write_metrics(path: Path, metrics: Dict[str, float]) -> None:
         json.dump(metrics, handler, ensure_ascii=True, indent=2, sort_keys=True)
 
 
+def _print_metrics(metrics: Dict[str, float]) -> None:
+    """在終端輸出評估指標。"""
+    pbm: float = metrics.get("pbm", float("nan"))
+    rms: float = metrics.get("rms", float("nan"))
+    bad_threshold: float = metrics.get("bad_threshold", float("nan"))
+    valid_pixel_count: float = metrics.get("valid_pixel_count", float("nan"))
+    message: str = (
+        "評估結果:\n"
+        f"  PBM: {pbm:.4f}%\n"
+        f"  RMS: {rms:.4f}\n"
+        f"  Bad Threshold: {bad_threshold:.4f}\n"
+        f"  Valid Pixel Count: {valid_pixel_count:.0f}"
+    )
+    print(message)
+
+
 def _validate_eval_args(args: argparse.Namespace) -> None:
     """驗證評估相關 CLI 參數。"""
     if args.eval and not args.gt:
@@ -577,6 +593,7 @@ def main() -> None:
         gt_disp: np.ndarray = read_pfm(args.gt)
         metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, args.bad_threshold)
         _write_metrics(output_metrics, metrics)
+        _print_metrics(metrics)
 
     metadata: Dict[str, str] = _build_run_metadata(
         args,
