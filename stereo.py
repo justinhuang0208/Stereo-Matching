@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -48,6 +50,44 @@ def _print_progress(current: int, total: int, label: str) -> None:
         sys.stdout.write(f"\r{message}\n")
     else:
         sys.stdout.write(f"\r{message}")
+    sys.stdout.flush()
+
+
+@dataclass
+class DatasetProgressState:
+    """批次處理 dataset 的進度顯示狀態。"""
+
+    rendered: bool = False
+
+
+def _print_dataset_stage_progress(
+    dataset_current: int,
+    dataset_total: int,
+    stage_current: int,
+    stage_total: int,
+    label: str,
+    state: DatasetProgressState,
+) -> None:
+    """顯示 dataset 與當前步驟的雙行進度。"""
+    if dataset_total <= 0:
+        raise ValueError("dataset_total 必須為正整數。")
+    if stage_total <= 0:
+        raise ValueError("stage_total 必須為正整數。")
+    clamped_dataset: int = min(max(dataset_current, 0), dataset_total)
+    clamped_stage: int = min(max(stage_current, 0), stage_total)
+    dataset_percent: float = (clamped_dataset / float(dataset_total)) * 100.0
+    stage_percent: float = (clamped_stage / float(stage_total)) * 100.0
+    dataset_line: str = f"Dataset: {clamped_dataset}/{dataset_total} ({dataset_percent:5.1f}%)"
+    stage_line: str = f"{label}: {clamped_stage}/{stage_total} ({stage_percent:5.1f}%)"
+    if not state.rendered:
+        sys.stdout.write(f"{dataset_line}\n{stage_line}")
+        sys.stdout.flush()
+        state.rendered = True
+        return
+    sys.stdout.write("\033[1A\r\033[2K")
+    sys.stdout.write(dataset_line)
+    sys.stdout.write("\n\r\033[2K")
+    sys.stdout.write(stage_line)
     sys.stdout.flush()
 
 
@@ -148,7 +188,8 @@ def compute_disparity(
     median_block_rows: int = DEFAULT_MEDIAN_BLOCK_ROWS,
     gaussian_sigma: float = DEFAULT_GAUSSIAN_SIGMA,
     bilateral_sigma: float = DEFAULT_BILATERAL_SIGMA,
-    show_progress: bool = False,
+    show_progress: bool = True,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """完整流程：WCT cost volume -> 濾波聚合 -> WTA。
 
@@ -166,19 +207,27 @@ def compute_disparity(
         median_block_rows: Median Filter 分塊列數。
         gaussian_sigma: Gaussian Filter 標準差。
         bilateral_sigma: Bilateral Filter 標準差。
+        show_progress: 是否顯示進度（progress_callback 有提供時會忽略）。
+        progress_callback: 自訂進度回呼函式。
 
     回傳:
         (disparity, min_cost)。
     """
     ensure_same_shape(left_gray, right_gray)
-    progress_callback: Optional[Callable[[int, int, str], None]] = _print_progress if show_progress else None
+    progress: Optional[Callable[[int, int, str], None]]
+    if progress_callback is not None:
+        progress = progress_callback
+    elif show_progress:
+        progress = _print_progress
+    else:
+        progress = None
     dsi: np.ndarray = compute_wct_cost_volume(
         left_gray,
         right_gray,
         dmax=dmax,
         radius=wct_radius,
         base_weight=base_weight,
-        progress_callback=progress_callback,
+        progress_callback=progress,
     )
     disparity, min_cost = aggregate_and_wta(
         dsi,
@@ -191,7 +240,7 @@ def compute_disparity(
         median_block_rows=median_block_rows,
         gaussian_sigma=gaussian_sigma,
         bilateral_sigma=bilateral_sigma,
-        progress_callback=progress_callback,
+        progress_callback=progress,
     )
     return disparity, min_cost
 
@@ -252,12 +301,93 @@ def _save_disparity_color_image(disparity: np.ndarray, dmax: int, path: str) -> 
     disp_img.save(path)
 
 
+def _read_ndisp_summary(path: Path) -> Dict[str, int]:
+    """讀取 ndisp_summary.csv 對應表。
+
+    參數:
+        path: CSV 檔案路徑。
+
+    回傳:
+        場景名稱到 ndisp 的映射。
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"找不到 ndisp_summary.csv: {path}")
+    mapping: Dict[str, int] = {}
+    with path.open("r", encoding="utf-8") as handler:
+        reader = csv.DictReader(handler)
+        for row in reader:
+            scene: str = (row.get("scene") or "").strip()
+            ndisp_raw: str = (row.get("ndisp") or "").strip()
+            if not scene or not ndisp_raw:
+                continue
+            if not scene.endswith("-perfect"):
+                continue
+            try:
+                ndisp: int = int(ndisp_raw)
+            except ValueError:
+                continue
+            mapping[scene] = ndisp
+    if not mapping:
+        raise ValueError("ndisp_summary.csv 內容為空或無有效場景。")
+    return mapping
+
+
+def _resolve_dataset_paths(dataset_root: Path, scene: str) -> Tuple[Path, Path, Path]:
+    """依場景名稱組合資料路徑。
+
+    參數:
+        dataset_root: dataset 根目錄。
+        scene: 場景名稱。
+
+    回傳:
+        (left_path, right_path, gt_path)。
+    """
+    scene_dir: Path = dataset_root / scene
+    left_path: Path = scene_dir / "im0.png"
+    right_path: Path = scene_dir / "im1.png"
+    gt_path: Path = scene_dir / "disp0.pfm"
+    return left_path, right_path, gt_path
+
+
+def _resolve_scene_inputs(
+    dataset_root: Path,
+    scene: str,
+    ndisp_map: Dict[str, int],
+    dmax_override: int,
+) -> Tuple[Path, Path, Path, int]:
+    """解析場景對應輸入與 dmax。
+
+    參數:
+        dataset_root: dataset 根目錄。
+        scene: 場景名稱。
+        ndisp_map: 場景到 ndisp 的映射。
+        dmax_override: 覆蓋用 dmax（<=0 表示不覆蓋）。
+
+    回傳:
+        (left_path, right_path, gt_path, dmax)。
+    """
+    left_path, right_path, gt_path = _resolve_dataset_paths(dataset_root, scene)
+    if not left_path.exists():
+        raise FileNotFoundError(f"找不到左影像: {left_path}")
+    if not right_path.exists():
+        raise FileNotFoundError(f"找不到右影像: {right_path}")
+    if not gt_path.exists():
+        raise FileNotFoundError(f"找不到 GT: {gt_path}")
+    if dmax_override > 0:
+        return left_path, right_path, gt_path, dmax_override
+    if scene not in ndisp_map:
+        raise ValueError(f"ndisp_summary.csv 缺少場景 {scene} 的 dmax，請手動指定 --dmax。")
+    return left_path, right_path, gt_path, int(ndisp_map[scene])
+
+
 def _parse_args() -> argparse.Namespace:
     """解析 CLI 參數。"""
     parser = argparse.ArgumentParser(description="Stereo Matching (WCT + Guided Filter + WTA)")
-    parser.add_argument("--left", required=True, type=str, help="左影像路徑")
-    parser.add_argument("--right", required=True, type=str, help="右影像路徑")
-    parser.add_argument("--dmax", required=True, type=int, help="最大視差")
+    parser.add_argument("--left", type=str, default="", help="左影像路徑")
+    parser.add_argument("--right", type=str, default="", help="右影像路徑")
+    parser.add_argument("--dmax", type=int, default=0, help="最大視差")
+    parser.add_argument("--dataset", type=str, default="", help="dataset 資料夾名稱")
+    parser.add_argument("--all-datasets", action="store_true", help="批次處理 dataset 內所有場景")
     parser.add_argument("--wct_radius", type=int, default=DEFAULT_WCT_RADIUS, help="WCT 半徑")
     parser.add_argument("--base_weight", type=float, default=DEFAULT_BASE_WEIGHT, help="WCT 基準權重")
     parser.add_argument("--guided_radius", type=int, default=DEFAULT_GUIDED_RADIUS, help="Guided Filter 半徑")
@@ -285,10 +415,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
     parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
-    parser.add_argument("--eval", action="store_true", help="是否與 GT 進行評估")
     parser.add_argument("--gt", type=str, default="", help="GT PFM 檔案路徑")
     parser.add_argument("--bad_threshold", type=float, default=DEFAULT_BAD_THRESHOLD, help="Bad pixel 閾值")
-    parser.add_argument("--progress", action="store_true", help="顯示簡單進度")
     return parser.parse_args()
 
 
@@ -331,6 +459,12 @@ def _build_run_metadata(
     output_color: Path,
     output_npz: Path,
     output_metrics: Optional[Path],
+    resolved_left: Path,
+    resolved_right: Path,
+    resolved_gt: Path,
+    resolved_dmax: int,
+    dataset_name: str,
+    all_datasets: bool,
 ) -> Dict[str, str]:
     """建立本次執行的參數摘要。
 
@@ -348,9 +482,9 @@ def _build_run_metadata(
     return {
         "timestamp": run_dir.name,
         "run_dir": str(run_dir),
-        "left": str(args.left),
-        "right": str(args.right),
-        "dmax": str(args.dmax),
+        "left": str(resolved_left),
+        "right": str(resolved_right),
+        "dmax": str(resolved_dmax),
         "wct_radius": str(args.wct_radius),
         "base_weight": str(args.base_weight),
         "guided_radius": str(args.guided_radius),
@@ -362,9 +496,11 @@ def _build_run_metadata(
         "gaussian_sigma": str(args.gaussian_sigma),
         "bilateral_sigma": str(args.bilateral_sigma),
         "bad_threshold": str(args.bad_threshold),
-        "eval": str(bool(args.eval)),
-        "gt": str(args.gt),
-        "progress": str(bool(args.progress)),
+        "eval": str(True),
+        "gt": str(resolved_gt),
+        "dataset": dataset_name,
+        "all_datasets": str(bool(all_datasets)),
+        "progress": str(True),
         "output_disparity_png": str(output_gray),
         "output_disparity_color_png": str(output_color),
         "output_disparity_npz": str(output_npz),
@@ -434,6 +570,12 @@ def _write_metrics(path: Path, metrics: Dict[str, float]) -> None:
         json.dump(metrics, handler, ensure_ascii=True, indent=2, sort_keys=True)
 
 
+def _write_json(path: Path, data: Dict[str, object]) -> None:
+    """輸出 JSON 檔案。"""
+    with path.open("w", encoding="utf-8") as handler:
+        json.dump(data, handler, ensure_ascii=True, indent=2, sort_keys=True)
+
+
 def _print_metrics(metrics: Dict[str, float]) -> None:
     """在終端輸出評估指標。"""
     pbm: float = metrics.get("pbm", float("nan"))
@@ -450,32 +592,64 @@ def _print_metrics(metrics: Dict[str, float]) -> None:
     print(message)
 
 
-def _validate_eval_args(args: argparse.Namespace) -> None:
-    """驗證評估相關 CLI 參數。"""
-    if args.eval and not args.gt:
-        raise ValueError("使用 --eval 時必須提供 --gt 路徑。")
-    if args.gt and not args.eval:
-        raise ValueError("提供 --gt 時必須同時加上 --eval。")
+def _validate_args(args: argparse.Namespace, dataset_root: Path, ndisp_map: Dict[str, int]) -> None:
+    """驗證 CLI 參數。"""
+    if args.all_datasets and args.dataset:
+        raise ValueError("不可同時使用 --dataset 與 --all-datasets。")
+    if args.all_datasets:
+        if args.left or args.right or args.gt:
+            raise ValueError("使用 --all-datasets 時不可提供 --left/--right/--gt。")
+        if args.dmax > 0:
+            raise ValueError("使用 --all-datasets 時不可提供 --dmax。")
+        if not dataset_root.exists():
+            raise FileNotFoundError(f"找不到 dataset 根目錄: {dataset_root}")
+        if not ndisp_map:
+            raise ValueError("ndisp_summary.csv 無有效場景可用。")
+        return
+    if args.dataset:
+        if args.left or args.right or args.gt:
+            raise ValueError("使用 --dataset 時不可同時提供 --left/--right/--gt。")
+        if args.dmax < 0:
+            raise ValueError("--dmax 必須為正整數。")
+        if not dataset_root.exists():
+            raise FileNotFoundError(f"找不到 dataset 根目錄: {dataset_root}")
+        if args.dmax == 0 and args.dataset not in ndisp_map:
+            raise ValueError(f"ndisp_summary.csv 缺少場景 {args.dataset} 的 dmax，請手動指定 --dmax。")
+        return
+    if not args.left or not args.right:
+        raise ValueError("未使用 --dataset 時必須提供 --left 與 --right。")
+    if args.dmax <= 0:
+        raise ValueError("未使用 --dataset 時必須提供有效的 --dmax。")
+    if not args.gt:
+        raise ValueError("未使用 --dataset 時必須提供 --gt。")
 
 
-def main() -> None:
-    """簡易驗證入口：讀入左右影像並輸出視差圖。"""
-    args: argparse.Namespace = _parse_args()
-    _validate_eval_args(args)
-    timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S")
-    run_dir: Path = _create_run_directory("result", timestamp)
+def _run_scene(
+    args: argparse.Namespace,
+    run_dir: Path,
+    left_path: Path,
+    right_path: Path,
+    gt_path: Path,
+    dmax: int,
+    output_metrics: Optional[Path],
+    dataset_name: str,
+    all_datasets: bool,
+    print_metrics: bool,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, float]:
+    """執行單場景計算與評估。"""
+    run_dir.mkdir(parents=True, exist_ok=True)
     output_gray: Path = run_dir / "disparity.png"
     output_color: Path = run_dir / "disparity_color.png"
     output_npz: Path = run_dir / "disparity.npz"
-    left_img: np.ndarray = read_image(args.left)
-    right_img: np.ndarray = read_image(args.right)
+    left_img: np.ndarray = read_image(str(left_path))
+    right_img: np.ndarray = read_image(str(right_path))
     left_gray: np.ndarray = to_gray(left_img)
     right_gray: np.ndarray = to_gray(right_img)
-
     disparity, min_cost = compute_disparity(
         left_gray,
         right_gray,
-        dmax=args.dmax,
+        dmax=dmax,
         wct_radius=args.wct_radius,
         base_weight=args.base_weight,
         guided_radius=args.guided_radius,
@@ -486,21 +660,18 @@ def main() -> None:
         median_block_rows=args.median_block_rows,
         gaussian_sigma=args.gaussian_sigma,
         bilateral_sigma=args.bilateral_sigma,
-        show_progress=args.progress,
+        show_progress=progress_callback is None,
+        progress_callback=progress_callback,
     )
-
-    _save_disparity_image(disparity, args.dmax, str(output_gray))
-    _save_disparity_color_image(disparity, args.dmax, str(output_color))
+    _save_disparity_image(disparity, dmax, str(output_gray))
+    _save_disparity_color_image(disparity, dmax, str(output_color))
     save_disparity_npz(str(output_npz), disparity, min_cost)
-
-    output_metrics: Optional[Path] = None
-    if args.eval:
-        output_metrics = run_dir / "metrics.json"
-        gt_disp: np.ndarray = read_pfm(args.gt)
-        metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, args.bad_threshold)
+    gt_disp: np.ndarray = read_pfm(str(gt_path))
+    metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, args.bad_threshold)
+    if output_metrics is not None:
         _write_metrics(output_metrics, metrics)
+    if print_metrics:
         _print_metrics(metrics)
-
     metadata: Dict[str, str] = _build_run_metadata(
         args,
         run_dir,
@@ -508,10 +679,116 @@ def main() -> None:
         output_color,
         output_npz,
         output_metrics,
+        left_path,
+        right_path,
+        gt_path,
+        dmax,
+        dataset_name,
+        all_datasets,
     )
     _write_run_metadata(run_dir / "params.json", metadata)
-
     _ = min_cost
+    return metrics
+
+
+def main() -> None:
+    """簡易驗證入口：讀入左右影像並輸出視差圖。"""
+    args: argparse.Namespace = _parse_args()
+    dataset_root: Path = Path("dataset")
+    ndisp_map: Dict[str, int] = {}
+    if args.all_datasets or args.dataset:
+        ndisp_map = _read_ndisp_summary(dataset_root / "ndisp_summary.csv")
+    _validate_args(args, dataset_root, ndisp_map)
+    timestamp: str = datetime.now().strftime("%Y%m%d%H%M%S")
+    run_dir: Path = _create_run_directory("result", timestamp)
+    if args.all_datasets:
+        scenes: List[str] = sorted(
+            scene for scene in ndisp_map.keys() if (dataset_root / scene).is_dir()
+        )
+        if not scenes:
+            raise ValueError("dataset 內沒有可用場景。")
+        per_scene_metrics: Dict[str, Dict[str, float]] = {}
+        total_scenes: int = len(scenes)
+        progress_state: DatasetProgressState = DatasetProgressState()
+        for index, scene in enumerate(scenes, start=1):
+            scene_dir: Path = run_dir / scene
+            scene_dir.mkdir(parents=True, exist_ok=False)
+            left_path, right_path, gt_path, dmax = _resolve_scene_inputs(
+                dataset_root,
+                scene,
+                ndisp_map,
+                0,
+            )
+            def progress_callback(current: int, total: int, label: str, idx: int = index) -> None:
+                """更新 dataset 與步驟進度顯示。"""
+                _print_dataset_stage_progress(
+                    idx,
+                    total_scenes,
+                    current,
+                    total,
+                    label,
+                    progress_state,
+                )
+            metrics: Dict[str, float] = _run_scene(
+                args,
+                scene_dir,
+                left_path,
+                right_path,
+                gt_path,
+                dmax,
+                output_metrics=None,
+                dataset_name=scene,
+                all_datasets=True,
+                print_metrics=False,
+                progress_callback=progress_callback,
+            )
+            per_scene_metrics[scene] = metrics
+        if progress_state.rendered:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        pbm_values: List[float] = [m["pbm"] for m in per_scene_metrics.values()]
+        rms_values: List[float] = [m["rms"] for m in per_scene_metrics.values()]
+        summary: Dict[str, object] = {
+            "scene_count": len(per_scene_metrics),
+            "bad_threshold": float(args.bad_threshold),
+            "pbm_mean": float(np.mean(pbm_values)) if pbm_values else float("nan"),
+            "rms_mean": float(np.mean(rms_values)) if rms_values else float("nan"),
+            "scenes": per_scene_metrics,
+        }
+        _write_json(run_dir / "metrics_summary.json", summary)
+        return
+    if args.dataset:
+        left_path, right_path, gt_path, dmax = _resolve_scene_inputs(
+            dataset_root,
+            args.dataset,
+            ndisp_map,
+            args.dmax,
+        )
+        _run_scene(
+            args,
+            run_dir,
+            left_path,
+            right_path,
+            gt_path,
+            dmax,
+            output_metrics=run_dir / "metrics.json",
+            dataset_name=args.dataset,
+            all_datasets=False,
+            print_metrics=True,
+        )
+        return
+    _run_scene(
+        args,
+        run_dir,
+        Path(args.left),
+        Path(args.right),
+        Path(args.gt),
+        args.dmax,
+        output_metrics=run_dir / "metrics.json",
+        dataset_name="",
+        all_datasets=False,
+        print_metrics=True,
+    )
 
 
 if __name__ == "__main__":

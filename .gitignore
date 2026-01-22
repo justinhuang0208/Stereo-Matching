@@ -2,3 +2,4 @@ result/
 script/
 __pycache__/
 .vscode/
+dataset/

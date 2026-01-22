@@ -15,17 +15,20 @@ pip install numpy pillow
 使用 `stereo.py` 作為主程式，透過命令列參數執行：
 
 ```bash
-python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最大視差> [其他選項]
+python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最大視差> --gt <GT PFM 路徑> [其他選項]
 ```
 
-#### 必要參數
+#### 必要參數（未使用 dataset 模式）
 
 - `--left`: 左影像檔案路徑（支援常見影像格式：PNG, JPG, BMP 等）
 - `--right`: 右影像檔案路徑
 - `--dmax`: 最大視差數量（正整數，例如 64）
+- `--gt`: GT PFM 檔案路徑（預設所有執行皆會評估）
 
 #### 可選參數
 
+- `--dataset`: dataset 資料夾名稱（自動使用 `im0.png`、`im1.png`、`disp0.pfm`，並從 `ndisp_summary.csv` 取得 `dmax`）
+- `--all-datasets`: 批次處理 `dataset/` 下所有場景並輸出彙總評估
 - `--wct_radius`: WCT 半徑（預設：4）
 - `--base_weight`: WCT 基準權重（預設：8.0）
 - `--guided_radius`: Guided Filter 視窗半徑（預設：3）
@@ -34,10 +37,8 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--median_radius`: Median Filter 視窗半徑（預設：3）
 - `--gaussian_sigma`: Gaussian sigma（預設：1.0）
 - `--bilateral_sigma`: Bilateral sigma（預設：1.0）
-- `--eval`: 是否與 GT 進行評估（預設：False）
-- `--gt`: GT PFM 檔案路徑（搭配 `--eval`）
 - `--bad_threshold`: Bad pixel 閾值（預設：1.0）
-- `--progress`: 顯示簡單進度（可選）
+- 預設會顯示簡單進度
 
 #### 範例
 
@@ -57,17 +58,21 @@ python stereo.py \
   --filter guided \
   --median_radius 3 \
   --gaussian_sigma 1.0 \
-  --bilateral_sigma 1.0 \
-  --progress
+  --bilateral_sigma 1.0
 
-# 含 GT 評估的範例
+# 含 GT 評估的範例（預設皆會評估）
 python stereo.py \
   --left im0.png \
   --right im1.png \
   --dmax 64 \
-  --eval \
   --gt dataset/Motorcycle-perfect/disp0.pfm \
   --bad_threshold 1.0
+
+# 使用 dataset 名稱（自動對應 im0/im1/disp0 並取得 dmax）
+python stereo.py --dataset Motorcycle-perfect
+
+# 批次處理 dataset 內所有場景（輸出 metrics_summary.json）
+python stereo.py --all-datasets
 ```
 
 ### 方法一補充：使用既有 NPZ 重新評估
