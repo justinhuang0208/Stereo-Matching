@@ -6,7 +6,15 @@ import numpy as np
 import numba
 
 
-_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(cache=True, fastmath=False)
+_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(
+    cache=True,
+    fastmath=False,
+)
+_NUMBA_NJIT_PARALLEL: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(
+    cache=True,
+    fastmath=False,
+    parallel=True,
+)
 
 
 def generate_offsets(radius: int = 4) -> List[Tuple[int, int, int]]:
@@ -96,7 +104,7 @@ def _offsets_to_array(offsets: Sequence[Tuple[int, int, int]]) -> np.ndarray:
     return np.asarray(offsets, dtype=np.int32)
 
 
-@_NUMBA_NJIT
+@_NUMBA_NJIT_PARALLEL
 def compute_census_bits_numba(
     image: np.ndarray,
     offsets: np.ndarray,
@@ -116,12 +124,15 @@ def compute_census_bits_numba(
     num_offsets: int = int(offsets.shape[0])
     bits: np.ndarray = np.zeros((num_offsets, height, width), dtype=np.bool_)
     valid_mask: np.ndarray = np.zeros((height, width), dtype=np.bool_)
+    # 先計算所有位移都有效的中心像素範圍
     y_start, y_end, x_start, x_end = _compute_valid_bounds_numba(height, width, offsets)
     if y_start < y_end and x_start < x_end:
-        for y in range(y_start, y_end):
+        # 標記中心像素的有效區域，避免邊界越界
+        for y in numba.prange(y_start, y_end):
             for x in range(x_start, x_end):
                 valid_mask[y, x] = True
-    for idx in range(num_offsets):
+    # 逐位移比較鄰點與中心點，建立 Census bits
+    for idx in numba.prange(num_offsets):
         dy: int = int(offsets[idx, 0])
         dx: int = int(offsets[idx, 1])
         y_src_start: int = 0 if dy >= 0 else -dy
@@ -138,6 +149,54 @@ def compute_census_bits_numba(
     return bits, valid_mask
 
 
+@_NUMBA_NJIT_PARALLEL
+def _compute_wct_cost_volume_parallel_range(
+    left_bits: np.ndarray,
+    right_bits: np.ndarray,
+    left_valid: np.ndarray,
+    right_valid: np.ndarray,
+    weights: np.ndarray,
+    dsi: np.ndarray,
+    d_start: int,
+    d_end: int,
+    large_value: float,
+) -> None:
+    """以 Numba 平行化計算指定視差範圍內的 WCT cost volume。
+
+    Args:
+        left_bits: 左影像 Census bits，形狀為 (N, H, W)。
+        right_bits: 右影像 Census bits，形狀為 (N, H, W)。
+        left_valid: 左影像有效遮罩，形狀為 (H, W)。
+        right_valid: 右影像有效遮罩，形狀為 (H, W)。
+        weights: 權重陣列，形狀為 (N,)。
+        dsi: 要寫入的 cost volume，形狀為 (H, W, D)。
+        d_start: 視差起始（含）。
+        d_end: 視差結束（不含）。
+        large_value: 無效區域的成本值。
+
+    Returns:
+        None。
+    """
+    num_offsets: int = int(left_bits.shape[0])
+    height: int = int(left_bits.shape[1])
+    width: int = int(left_bits.shape[2])
+    for d in numba.prange(d_start, d_end):
+        for y in range(height):
+            for x in range(width):
+                if d > 0 and x < d:
+                    dsi[y, x, d] = large_value
+                    continue
+                xr: int = x - d
+                if not (left_valid[y, x] and right_valid[y, xr]):
+                    dsi[y, x, d] = large_value
+                    continue
+                cost: np.float32 = np.float32(0.0)
+                for idx in range(num_offsets):
+                    if left_bits[idx, y, x] != right_bits[idx, y, xr]:
+                        cost = np.float32(cost + weights[idx])
+                dsi[y, x, d] = cost
+
+
 def compute_wct_cost_volume(
     left: np.ndarray,
     right: np.ndarray,
@@ -145,6 +204,8 @@ def compute_wct_cost_volume(
     radius: int = 4,
     base_weight: float = 8.0,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    parallel: bool = True,
+    parallel_chunk: int = 8,
 ) -> np.ndarray:
     """計算加權 Census Transform (WCT) 的 DSI cost volume。
 
@@ -154,6 +215,8 @@ def compute_wct_cost_volume(
         dmax: 最大視差數量。
         radius: Census 半徑。
         base_weight: r=1 的基準權重。
+        parallel: 是否啟用 Numba 平行化路徑。
+        parallel_chunk: 平行化時每次處理的視差數量。
     回傳:
         DSI cost volume，形狀為 (H, W, D)。
     """
@@ -163,6 +226,8 @@ def compute_wct_cost_volume(
         raise ValueError("left/right 影像尺寸不一致。")
     if dmax <= 0:
         raise ValueError("dmax 必須為正整數。")
+    if parallel_chunk <= 0:
+        raise ValueError("parallel_chunk 必須為正整數。")
 
     height: int = int(left.shape[0])
     width: int = int(left.shape[1])
@@ -172,14 +237,35 @@ def compute_wct_cost_volume(
     large_value: float = float(np.sum(weights))
     offsets_array: np.ndarray = _offsets_to_array(offsets)
 
+    # 先計算左右影像的 Census bits 與有效遮罩
     left_bits, left_valid = compute_census_bits_numba(left, offsets_array)
     right_bits, right_valid = compute_census_bits_numba(right, offsets_array)
     if left_valid.shape != right_valid.shape:
         raise ValueError("left/right 影像尺寸不一致。")
 
-    dsi: np.ndarray = np.full((height, width, dmax), large_value, dtype=np.float32)
+    # 初始化 DSI cost volume，預設為最大成本
+    dsi: np.ndarray = np.empty((height, width, dmax), dtype=np.float32)
     weight_vector: np.ndarray = weights.astype(np.float32)
 
+    if parallel:
+        for d_start in range(0, dmax, parallel_chunk):
+            d_end: int = min(d_start + parallel_chunk, dmax)
+            _compute_wct_cost_volume_parallel_range(
+                left_bits,
+                right_bits,
+                left_valid,
+                right_valid,
+                weight_vector,
+                dsi,
+                d_start,
+                d_end,
+                float(large_value),
+            )
+            if progress_callback is not None:
+                progress_callback(d_end, dmax, "WCT cost volume")
+        return dsi
+
+    # 逐視差計算 WCT cost，並依有效遮罩填入
     for d in range(dmax):
         if d >= width:
             if progress_callback is not None:

@@ -7,7 +7,15 @@ import numpy as np
 import numba
 
 
-_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(cache=True, fastmath=False)
+_NUMBA_NJIT: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(
+    cache=True,
+    fastmath=False,
+)
+_NUMBA_NJIT_PARALLEL: Callable[[Callable[..., object]], Callable[..., object]] = numba.njit(
+    cache=True,
+    fastmath=False,
+    parallel=True,
+)
 
 
 @_NUMBA_NJIT
@@ -24,11 +32,13 @@ def _integral_image_numba(image: np.ndarray) -> np.ndarray:
     width: int = int(image.shape[1])
     integral: np.ndarray = np.zeros((height + 1, width + 1), dtype=np.float32)
     temp: np.ndarray = np.empty((height, width), dtype=np.float32)
+    # 先累加每一欄，形成中間的列方向累加結果
     for x in range(width):
         col_sum: np.float32 = np.float32(0.0)
         for y in range(height):
             col_sum = np.float32(col_sum + image[y, x])
             temp[y, x] = col_sum
+    # 再累加每一列，得到完整的 integral image
     for y in range(height):
         row_sum = np.float32(0.0)
         for x in range(width):
@@ -89,7 +99,7 @@ class GuidedFilterPrecomputed:
     eps: float
 
 
-@_NUMBA_NJIT
+@_NUMBA_NJIT_PARALLEL
 def _box_sum_from_integral_numba(
     integral: np.ndarray,
     y0: np.ndarray,
@@ -112,7 +122,8 @@ def _box_sum_from_integral_numba(
     height: int = int(y0.shape[0])
     width: int = int(x0.shape[0])
     sum_region: np.ndarray = np.empty((height, width), dtype=np.float32)
-    for y in range(height):
+    # 依照每個像素的 box 範圍，從 integral image 取出區域總和
+    for y in numba.prange(height):
         y0v: int = int(y0[y])
         y1v: int = int(y1[y])
         for x in range(width):
@@ -190,6 +201,7 @@ def prepare_guided_filter(
         raise ValueError("eps 必須為正值。")
     guide_f: np.ndarray = guide.astype(np.float32)
     indices: BoxFilterIndex = _prepare_box_filter_index(guide_f.shape[0], guide_f.shape[1], radius)
+    # 預先計算 guide 的均值與變異數統計量
     mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices)
     mean_gg: np.ndarray = box_filter_mean_with_indices(guide_f * guide_f, indices)
     var_g: np.ndarray = mean_gg - mean_guide * mean_guide
@@ -221,6 +233,7 @@ def guided_filter_with_precompute(
         raise ValueError("src 必須為 2D。")
     if src.shape != precomputed.guide_f.shape:
         raise ValueError("src 與 guide 尺寸必須一致。")
+    # 計算 guided filter 的線性係數 a, b
     src_f: np.ndarray = src.astype(np.float32)
     mean_src: np.ndarray = box_filter_mean_with_indices(src_f, precomputed.indices)
     mean_gs: np.ndarray = box_filter_mean_with_indices(
@@ -230,6 +243,7 @@ def guided_filter_with_precompute(
     cov_gs: np.ndarray = mean_gs - precomputed.mean_guide * mean_src
     a: np.ndarray = cov_gs / (precomputed.var_g + np.float32(precomputed.eps))
     b: np.ndarray = mean_src - a * precomputed.mean_guide
+    # 對 a, b 做區域平均並生成輸出
     mean_a: np.ndarray = box_filter_mean_with_indices(a, precomputed.indices)
     mean_b: np.ndarray = box_filter_mean_with_indices(b, precomputed.indices)
     q: np.ndarray = mean_a * precomputed.guide_f + mean_b
