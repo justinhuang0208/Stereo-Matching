@@ -15,7 +15,7 @@ from PIL import Image
 from census import compute_wct_cost_volume
 from filters import bilateral_filter, gaussian_filter, median_filter
 from guided_filter import GuidedFilterPrecomputed, guided_filter_with_precompute, prepare_guided_filter
-from stereo_io import ensure_same_shape, read_image, read_pfm, save_disparity_npz, to_gray
+from stereo_io import ensure_same_shape, read_image, read_pfm, read_pgm_mask, save_disparity_npz, to_gray
 
 DEFAULT_WCT_RADIUS: int = 4
 DEFAULT_BASE_WEIGHT: float = 8.0
@@ -27,7 +27,7 @@ DEFAULT_MEDIAN_METHOD: str = "auto"
 DEFAULT_MEDIAN_BLOCK_ROWS: int = 128
 DEFAULT_GAUSSIAN_SIGMA: float = 1.0
 DEFAULT_BILATERAL_SIGMA: float = 1.0
-DEFAULT_BAD_THRESHOLD: float = 1.0
+DEFAULT_BAD_THRESHOLD: float = 2.0
 
 
 def _print_progress(current: int, total: int, label: str) -> None:
@@ -332,7 +332,7 @@ def _read_ndisp_summary(path: Path) -> Dict[str, int]:
     return mapping
 
 
-def _resolve_dataset_paths(dataset_root: Path, scene: str) -> Tuple[Path, Path, Path]:
+def _resolve_dataset_paths(dataset_root: Path, scene: str) -> Tuple[Path, Path, Path, Path]:
     """依場景名稱組合資料路徑。
 
     參數:
@@ -340,13 +340,14 @@ def _resolve_dataset_paths(dataset_root: Path, scene: str) -> Tuple[Path, Path, 
         scene: 場景名稱。
 
     回傳:
-        (left_path, right_path, gt_path)。
+        (left_path, right_path, gt_path, gt_mask_path)。
     """
     scene_dir: Path = dataset_root / scene
     left_path: Path = scene_dir / "im0.png"
     right_path: Path = scene_dir / "im1.png"
     gt_path: Path = scene_dir / "disp0.pfm"
-    return left_path, right_path, gt_path
+    gt_mask_path: Path = scene_dir / "disp0-n.pgm"
+    return left_path, right_path, gt_path, gt_mask_path
 
 
 def _resolve_scene_inputs(
@@ -354,7 +355,7 @@ def _resolve_scene_inputs(
     scene: str,
     ndisp_map: Dict[str, int],
     dmax_override: int,
-) -> Tuple[Path, Path, Path, int]:
+) -> Tuple[Path, Path, Path, Path, int]:
     """解析場景對應輸入與 dmax。
 
     參數:
@@ -364,20 +365,22 @@ def _resolve_scene_inputs(
         dmax_override: 覆蓋用 dmax（<=0 表示不覆蓋）。
 
     回傳:
-        (left_path, right_path, gt_path, dmax)。
+        (left_path, right_path, gt_path, gt_mask_path, dmax)。
     """
-    left_path, right_path, gt_path = _resolve_dataset_paths(dataset_root, scene)
+    left_path, right_path, gt_path, gt_mask_path = _resolve_dataset_paths(dataset_root, scene)
     if not left_path.exists():
         raise FileNotFoundError(f"找不到左影像: {left_path}")
     if not right_path.exists():
         raise FileNotFoundError(f"找不到右影像: {right_path}")
     if not gt_path.exists():
         raise FileNotFoundError(f"找不到 GT: {gt_path}")
+    if not gt_mask_path.exists():
+        raise FileNotFoundError(f"找不到 GT 遮罩: {gt_mask_path}")
     if dmax_override > 0:
-        return left_path, right_path, gt_path, dmax_override
+        return left_path, right_path, gt_path, gt_mask_path, dmax_override
     if scene not in ndisp_map:
         raise ValueError(f"ndisp_summary.csv 缺少場景 {scene} 的 dmax，請手動指定 --dmax。")
-    return left_path, right_path, gt_path, int(ndisp_map[scene])
+    return left_path, right_path, gt_path, gt_mask_path, int(ndisp_map[scene])
 
 
 def _parse_args() -> argparse.Namespace:
@@ -416,6 +419,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gaussian_sigma", type=float, default=DEFAULT_GAUSSIAN_SIGMA, help="Gaussian sigma")
     parser.add_argument("--bilateral_sigma", type=float, default=DEFAULT_BILATERAL_SIGMA, help="Bilateral sigma")
     parser.add_argument("--gt", type=str, default="", help="GT PFM 檔案路徑")
+    parser.add_argument("--gt-mask", type=str, default="", help="GT 遮罩 PGM 檔案路徑")
     parser.add_argument("--bad_threshold", type=float, default=DEFAULT_BAD_THRESHOLD, help="Bad pixel 閾值")
     return parser.parse_args()
 
@@ -462,6 +466,7 @@ def _build_run_metadata(
     resolved_left: Path,
     resolved_right: Path,
     resolved_gt: Path,
+    resolved_gt_mask: Path,
     resolved_dmax: int,
     dataset_name: str,
     all_datasets: bool,
@@ -475,6 +480,7 @@ def _build_run_metadata(
         output_color: 彩色視差圖輸出路徑。
         output_npz: 原始資料輸出路徑。
         output_metrics: 評估結果輸出路徑。
+        resolved_gt_mask: GT 遮罩路徑。
 
     回傳:
         參數摘要字典。
@@ -498,6 +504,7 @@ def _build_run_metadata(
         "bad_threshold": str(args.bad_threshold),
         "eval": str(True),
         "gt": str(resolved_gt),
+        "gt_mask": str(resolved_gt_mask),
         "dataset": dataset_name,
         "all_datasets": str(bool(all_datasets)),
         "progress": str(True),
@@ -525,6 +532,7 @@ def _write_run_metadata(path: Path, metadata: Dict[str, str]) -> None:
 def _compute_pbm_rms(
     disparity: np.ndarray,
     ground_truth: np.ndarray,
+    valid_mask: np.ndarray,
     bad_threshold: float,
 ) -> Dict[str, float]:
     """計算 PBM 與 RMS 指標。
@@ -532,6 +540,7 @@ def _compute_pbm_rms(
     參數:
         disparity: 估計視差圖。
         ground_truth: GT 視差圖（PFM）。
+        valid_mask: GT 有效像素遮罩。
         bad_threshold: bad pixel 閾值。
 
     回傳:
@@ -541,10 +550,14 @@ def _compute_pbm_rms(
         raise ValueError("disparity 與 ground_truth 尺寸不一致。")
     if disparity.ndim != 2 or ground_truth.ndim != 2:
         raise ValueError("disparity 與 ground_truth 必須為 2D。")
+    if valid_mask.shape != ground_truth.shape:
+        raise ValueError("valid_mask 與 ground_truth 尺寸不一致。")
+    if valid_mask.ndim != 2:
+        raise ValueError("valid_mask 必須為 2D。")
     if bad_threshold <= 0:
         raise ValueError("bad_threshold 必須為正數。")
 
-    gt_valid: np.ndarray = np.isfinite(ground_truth) & (ground_truth > 0)
+    gt_valid: np.ndarray = np.isfinite(ground_truth) & valid_mask
     valid_count: int = int(np.sum(gt_valid))
     if valid_count == 0:
         raise ValueError("ground_truth 沒有可用的有效像素。")
@@ -597,8 +610,8 @@ def _validate_args(args: argparse.Namespace, dataset_root: Path, ndisp_map: Dict
     if args.all_datasets and args.dataset:
         raise ValueError("不可同時使用 --dataset 與 --all-datasets。")
     if args.all_datasets:
-        if args.left or args.right or args.gt:
-            raise ValueError("使用 --all-datasets 時不可提供 --left/--right/--gt。")
+        if args.left or args.right or args.gt or args.gt_mask:
+            raise ValueError("使用 --all-datasets 時不可提供 --left/--right/--gt/--gt-mask。")
         if args.dmax > 0:
             raise ValueError("使用 --all-datasets 時不可提供 --dmax。")
         if not dataset_root.exists():
@@ -607,8 +620,8 @@ def _validate_args(args: argparse.Namespace, dataset_root: Path, ndisp_map: Dict
             raise ValueError("ndisp_summary.csv 無有效場景可用。")
         return
     if args.dataset:
-        if args.left or args.right or args.gt:
-            raise ValueError("使用 --dataset 時不可同時提供 --left/--right/--gt。")
+        if args.left or args.right or args.gt or args.gt_mask:
+            raise ValueError("使用 --dataset 時不可同時提供 --left/--right/--gt/--gt-mask。")
         if args.dmax < 0:
             raise ValueError("--dmax 必須為正整數。")
         if not dataset_root.exists():
@@ -622,6 +635,8 @@ def _validate_args(args: argparse.Namespace, dataset_root: Path, ndisp_map: Dict
         raise ValueError("未使用 --dataset 時必須提供有效的 --dmax。")
     if not args.gt:
         raise ValueError("未使用 --dataset 時必須提供 --gt。")
+    if not args.gt_mask:
+        raise ValueError("未使用 --dataset 時必須提供 --gt-mask。")
 
 
 def _run_scene(
@@ -630,6 +645,7 @@ def _run_scene(
     left_path: Path,
     right_path: Path,
     gt_path: Path,
+    gt_mask_path: Path,
     dmax: int,
     output_metrics: Optional[Path],
     dataset_name: str,
@@ -667,7 +683,8 @@ def _run_scene(
     _save_disparity_color_image(disparity, dmax, str(output_color))
     save_disparity_npz(str(output_npz), disparity, min_cost)
     gt_disp: np.ndarray = read_pfm(str(gt_path))
-    metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, args.bad_threshold)
+    gt_mask: np.ndarray = read_pgm_mask(str(gt_mask_path))
+    metrics: Dict[str, float] = _compute_pbm_rms(disparity, gt_disp, gt_mask, args.bad_threshold)
     if output_metrics is not None:
         _write_metrics(output_metrics, metrics)
     if print_metrics:
@@ -682,6 +699,7 @@ def _run_scene(
         left_path,
         right_path,
         gt_path,
+        gt_mask_path,
         dmax,
         dataset_name,
         all_datasets,
@@ -713,7 +731,7 @@ def main() -> None:
         for index, scene in enumerate(scenes, start=1):
             scene_dir: Path = run_dir / scene
             scene_dir.mkdir(parents=True, exist_ok=False)
-            left_path, right_path, gt_path, dmax = _resolve_scene_inputs(
+            left_path, right_path, gt_path, gt_mask_path, dmax = _resolve_scene_inputs(
                 dataset_root,
                 scene,
                 ndisp_map,
@@ -735,6 +753,7 @@ def main() -> None:
                 left_path,
                 right_path,
                 gt_path,
+                gt_mask_path,
                 dmax,
                 output_metrics=None,
                 dataset_name=scene,
@@ -758,7 +777,7 @@ def main() -> None:
         _write_json(run_dir / "metrics_summary.json", summary)
         return
     if args.dataset:
-        left_path, right_path, gt_path, dmax = _resolve_scene_inputs(
+        left_path, right_path, gt_path, gt_mask_path, dmax = _resolve_scene_inputs(
             dataset_root,
             args.dataset,
             ndisp_map,
@@ -770,6 +789,7 @@ def main() -> None:
             left_path,
             right_path,
             gt_path,
+            gt_mask_path,
             dmax,
             output_metrics=run_dir / "metrics.json",
             dataset_name=args.dataset,
@@ -783,6 +803,7 @@ def main() -> None:
         Path(args.left),
         Path(args.right),
         Path(args.gt),
+        Path(args.gt_mask),
         args.dmax,
         output_metrics=run_dir / "metrics.json",
         dataset_name="",

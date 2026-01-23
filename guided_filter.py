@@ -205,6 +205,7 @@ def prepare_guided_filter(
     mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices)
     mean_gg: np.ndarray = box_filter_mean_with_indices(guide_f * guide_f, indices)
     var_g: np.ndarray = mean_gg - mean_guide * mean_guide
+    var_g = np.maximum(var_g, np.float32(0.0))
     return GuidedFilterPrecomputed(
         guide_f=guide_f,
         indices=indices,
@@ -241,7 +242,9 @@ def guided_filter_with_precompute(
         precomputed.indices,
     )
     cov_gs: np.ndarray = mean_gs - precomputed.mean_guide * mean_src
-    a: np.ndarray = cov_gs / (precomputed.var_g + np.float32(precomputed.eps))
+    denom: np.ndarray = precomputed.var_g + np.float32(precomputed.eps)
+    denom = np.where(denom <= np.float32(0.0), np.float32(precomputed.eps), denom)
+    a: np.ndarray = cov_gs / denom
     b: np.ndarray = mean_src - a * precomputed.mean_guide
     # 對 a, b 做區域平均並生成輸出
     mean_a: np.ndarray = box_filter_mean_with_indices(a, precomputed.indices)

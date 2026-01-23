@@ -103,6 +103,23 @@ def read_pfm(path: str) -> np.ndarray:
         return image
 
 
+def read_pgm_mask(path: str) -> np.ndarray:
+    """讀取 PGM 遮罩並回傳布林陣列。
+
+    參數:
+        path: PGM 遮罩檔案路徑。
+
+    回傳:
+        遮罩陣列，True 表示有效像素。
+    """
+    image: np.ndarray = read_image(path)
+    if image.ndim == 3:
+        image = image[..., 0]
+    if image.ndim != 2:
+        raise ValueError("PGM 遮罩必須為 2D。")
+    return image > 0
+
+
 def write_pfm(path: str, image: np.ndarray, scale: float = 1.0) -> None:
     """將 float32 陣列寫入 PFM 檔案。
 

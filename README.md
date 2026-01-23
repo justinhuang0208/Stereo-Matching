@@ -15,7 +15,7 @@ pip install numpy pillow
 使用 `stereo.py` 作為主程式，透過命令列參數執行：
 
 ```bash
-python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最大視差> --gt <GT PFM 路徑> [其他選項]
+python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最大視差> --gt <GT PFM 路徑> --gt-mask <GT 遮罩 PGM 路徑> [其他選項]
 ```
 
 #### 必要參數（未使用 dataset 模式）
@@ -24,10 +24,11 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--right`: 右影像檔案路徑
 - `--dmax`: 最大視差數量（正整數，例如 64）
 - `--gt`: GT PFM 檔案路徑（預設所有執行皆會評估）
+- `--gt-mask`: GT 遮罩 PGM 檔案路徑（disp0-n.pgm）
 
 #### 可選參數
 
-- `--dataset`: dataset 資料夾名稱（自動使用 `im0.png`、`im1.png`、`disp0.pfm`，並從 `ndisp_summary.csv` 取得 `dmax`）
+- `--dataset`: dataset 資料夾名稱（自動使用 `im0.png`、`im1.png`、`disp0.pfm`、`disp0-n.pgm`，並從 `ndisp_summary.csv` 取得 `dmax`）
 - `--all-datasets`: 批次處理 `dataset/` 下所有場景並輸出彙總評估
 - `--wct_radius`: WCT 半徑（預設：4）
 - `--base_weight`: WCT 基準權重（預設：8.0）
@@ -66,6 +67,7 @@ python stereo.py \
   --right im1.png \
   --dmax 64 \
   --gt dataset/Motorcycle-perfect/disp0.pfm \
+  --gt-mask dataset/Motorcycle-perfect/disp0-n.pgm \
   --bad_threshold 1.0
 
 # 使用 dataset 名稱（自動對應 im0/im1/disp0 並取得 dmax）
@@ -81,13 +83,13 @@ python stereo.py --all-datasets
 
 ```bash
 # 基本使用
-python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --bad_threshold 2.0
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --gt_mask dataset/Motorcycle-perfect/disp0-n.pgm --bad_threshold 2.0
 
 # 當 NPZ 的 key 不是 disparity 時
-python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --key my_disp --bad_threshold 1.0
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --gt_mask dataset/Motorcycle-perfect/disp0-n.pgm --key my_disp --bad_threshold 1.0
 
 # 輸出評估結果到 JSON
-python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --bad_threshold 1.0 --output_json result/202601200157/metrics_custom.json
+python eval_npz.py --npz result/202601200157/disparity.npz --gt dataset/Motorcycle-perfect/disp0.pfm --gt_mask dataset/Motorcycle-perfect/disp0-n.pgm --bad_threshold 1.0 --output_json result/202601200157/metrics_custom.json
 ```
 
 ### 方法二：作為 Python 模組使用
