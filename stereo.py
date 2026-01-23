@@ -20,7 +20,7 @@ from stereo_io import ensure_same_shape, read_image, read_pfm, read_pgm_mask, sa
 DEFAULT_WCT_RADIUS: int = 4
 DEFAULT_BASE_WEIGHT: float = 8.0
 DEFAULT_GUIDED_RADIUS: int = 3
-DEFAULT_GUIDED_EPS: float = 1000
+DEFAULT_GUIDED_EPS: float = 0.01
 DEFAULT_FILTER_TYPE: str = "guided"
 DEFAULT_MEDIAN_RADIUS: int = 3
 DEFAULT_MEDIAN_METHOD: str = "auto"
@@ -660,8 +660,8 @@ def _run_scene(
     output_npz: Path = run_dir / "disparity.npz"
     left_img: np.ndarray = read_image(str(left_path))
     right_img: np.ndarray = read_image(str(right_path))
-    left_gray: np.ndarray = to_gray(left_img)
-    right_gray: np.ndarray = to_gray(right_img)
+    left_gray: np.ndarray = to_gray(left_img, normalize=True)
+    right_gray: np.ndarray = to_gray(right_img, normalize=True)
     disparity, min_cost = compute_disparity(
         left_gray,
         right_gray,

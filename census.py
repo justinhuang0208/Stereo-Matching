@@ -234,7 +234,7 @@ def compute_wct_cost_volume(
 
     offsets: List[Tuple[int, int, int]] = generate_offsets(radius)
     weights: np.ndarray = compute_weights(offsets, base_weight)
-    large_value: float = float(np.sum(weights))
+    large_value: float = float(np.sum(weights)) * 10.0
     offsets_array: np.ndarray = _offsets_to_array(offsets)
 
     # 先計算左右影像的 Census bits 與有效遮罩

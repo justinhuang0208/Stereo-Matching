@@ -19,11 +19,42 @@ def read_image(path: str) -> np.ndarray:
     return np.array(image)
 
 
-def to_gray(image: np.ndarray) -> np.ndarray:
-    """將影像轉為灰階 float32，保持原始亮度範圍。
+def _resolve_normalization_scale(image: np.ndarray, max_value: float | None) -> float:
+    """取得正規化到 0~1 時的縮放上限值。
+
+    參數:
+        image: 輸入影像陣列。
+        max_value: 指定的最大值，若為 None 則自動推斷。
+
+    回傳:
+        正規化用的最大值。
+    """
+    if max_value is not None:
+        if max_value <= 0:
+            raise ValueError("max_value 必須為正值。")
+        return float(max_value)
+    if np.issubdtype(image.dtype, np.integer):
+        return float(np.iinfo(image.dtype).max)
+    image_min: float = float(np.nanmin(image))
+    image_max: float = float(np.nanmax(image))
+    if image_min >= 0.0 and image_max <= 1.0:
+        return 1.0
+    if image_max <= 0.0:
+        raise ValueError("影像最大值必須為正值，才能正規化到 0~1。")
+    return image_max
+
+
+def to_gray(
+    image: np.ndarray,
+    normalize: bool = False,
+    max_value: float | None = None,
+) -> np.ndarray:
+    """將影像轉為灰階 float32，可選擇是否正規化到 0~1。
 
     參數:
         image: 輸入影像陣列，形狀為 HxW 或 HxWx3/4。
+        normalize: 是否將輸出正規化到 0~1。
+        max_value: 正規化時使用的最大值，None 代表自動推斷。
 
     回傳:
         灰階影像陣列，dtype 為 float32。
@@ -36,7 +67,12 @@ def to_gray(image: np.ndarray) -> np.ndarray:
     else:
         raise ValueError("不支援的影像形狀")
 
-    return gray.astype(np.float32)
+    gray_f: np.ndarray = gray.astype(np.float32)
+    if not normalize:
+        return gray_f
+    scale: float = _resolve_normalization_scale(image, max_value)
+    normalized: np.ndarray = gray_f / np.float32(scale)
+    return np.clip(normalized, 0.0, 1.0).astype(np.float32)
 
 
 

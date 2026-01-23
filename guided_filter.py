@@ -30,19 +30,19 @@ def _integral_image_numba(image: np.ndarray) -> np.ndarray:
     """
     height: int = int(image.shape[0])
     width: int = int(image.shape[1])
-    integral: np.ndarray = np.zeros((height + 1, width + 1), dtype=np.float32)
-    temp: np.ndarray = np.empty((height, width), dtype=np.float32)
+    integral: np.ndarray = np.zeros((height + 1, width + 1), dtype=np.float64)
+    temp: np.ndarray = np.empty((height, width), dtype=np.float64)
     # 先累加每一欄，形成中間的列方向累加結果
     for x in range(width):
-        col_sum: np.float32 = np.float32(0.0)
+        col_sum: np.float64 = np.float64(0.0)
         for y in range(height):
-            col_sum = np.float32(col_sum + image[y, x])
+            col_sum = np.float64(col_sum + image[y, x])
             temp[y, x] = col_sum
     # 再累加每一列，得到完整的 integral image
     for y in range(height):
-        row_sum = np.float32(0.0)
+        row_sum = np.float64(0.0)
         for x in range(width):
-            row_sum = np.float32(row_sum + temp[y, x])
+            row_sum = np.float64(row_sum + temp[y, x])
             integral[y + 1, x + 1] = row_sum
     return integral
 
@@ -83,7 +83,7 @@ def _prepare_box_filter_index(height: int, width: int, radius: int) -> BoxFilter
     x0: np.ndarray = np.clip(xs - radius, 0, width - 1)
     x1: np.ndarray = np.clip(xs + radius, 0, width - 1)
     area: np.ndarray = (y1 - y0 + 1)[:, None] * (x1 - x0 + 1)[None, :]
-    return BoxFilterIndex(y0=y0, y1=y1, x0=x0, x1=x1, area=area.astype(np.float32))
+    return BoxFilterIndex(y0=y0, y1=y1, x0=x0, x1=x1, area=area.astype(np.float64))
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,7 @@ def _box_sum_from_integral_numba(
     """
     height: int = int(y0.shape[0])
     width: int = int(x0.shape[0])
-    sum_region: np.ndarray = np.empty((height, width), dtype=np.float32)
+    sum_region: np.ndarray = np.empty((height, width), dtype=np.float64)
     # 依照每個像素的 box 範圍，從 integral image 取出區域總和
     for y in numba.prange(height):
         y0v: int = int(y0[y])
@@ -167,7 +167,7 @@ def box_filter_mean_with_indices(
     """
     if image.ndim != 2:
         raise ValueError("image 必須為 2D。")
-    image_f: np.ndarray = image.astype(np.float32, copy=False)
+    image_f: np.ndarray = image.astype(np.float64, copy=False)
     integral = _integral_image_numba(image_f)
     sum_region = _box_sum_from_integral_numba(
         integral,
@@ -199,7 +199,7 @@ def prepare_guided_filter(
         raise ValueError("radius 必須為正整數。")
     if eps <= 0:
         raise ValueError("eps 必須為正值。")
-    guide_f: np.ndarray = guide.astype(np.float32)
+    guide_f: np.ndarray = guide.astype(np.float64)
     indices: BoxFilterIndex = _prepare_box_filter_index(guide_f.shape[0], guide_f.shape[1], radius)
     # 預先計算 guide 的均值與變異數統計量
     mean_guide: np.ndarray = box_filter_mean_with_indices(guide_f, indices)

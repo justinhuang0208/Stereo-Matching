@@ -105,8 +105,8 @@ left_img = read_image("left.png")
 right_img = read_image("right.png")
 
 # 轉灰階
-left_gray = to_gray(left_img)
-right_gray = to_gray(right_img)
+left_gray = to_gray(left_img, normalize=True)
+right_gray = to_gray(right_img, normalize=True)
 
 # 計算視差
 disparity, min_cost = compute_disparity(
@@ -116,7 +116,7 @@ disparity, min_cost = compute_disparity(
     wct_radius=4,
     base_weight=8.0,
     guided_radius=3,
-    guided_eps=0.0154,
+    guided_eps=0.01,
     filter_type="guided",
     median_radius=3,
     gaussian_sigma=1.0,
@@ -137,8 +137,8 @@ from stereo import aggregate_and_wta
 # 讀取與轉灰階
 left_img = read_image("left.png")
 right_img = read_image("right.png")
-left_gray = to_gray(left_img)
-right_gray = to_gray(right_img)
+left_gray = to_gray(left_img, normalize=True)
+right_gray = to_gray(right_img, normalize=True)
 
 # 步驟 1: 計算 WCT cost volume
 dsi = compute_wct_cost_volume(
@@ -154,7 +154,7 @@ disparity, min_cost = aggregate_and_wta(
     dsi=dsi,
     guide=left_gray,
     guided_radius=3,
-    guided_eps=0.0154,
+    guided_eps=0.01,
     filter_type="guided",
     median_radius=3,
     gaussian_sigma=1.0,
@@ -172,8 +172,8 @@ from stereo_io import read_image, to_gray, ensure_same_shape
 # 讀取影像
 img = read_image("image.png")  # 回傳 numpy 陣列
 
-# 轉灰階（保留原始亮度範圍）
-gray = to_gray(img)  # 回傳 float32
+# 轉灰階（可正規化到 0~1）
+gray = to_gray(img, normalize=True)  # 回傳 float32
 
 # 確認兩影像尺寸一致
 h, w = ensure_same_shape(left_gray, right_gray)
@@ -206,7 +206,7 @@ integral = integral_image(image)
 mean = box_filter_mean(image, radius=3)
 
 # Guided Filter
-filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=0.0154)
+filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=0.01)
 ```
 
 **Filtering (`filters.py`)**
@@ -223,7 +223,7 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 
 ### `stereo_io.py`
 - `read_image(path)`: 讀取影像檔案
-- `to_gray(image)`: 轉灰階，保留原始亮度範圍
+- `to_gray(image, normalize=False, max_value=None)`: 轉灰階，可選擇正規化到 0~1
 - `ensure_same_shape(left, right)`: 確認兩影像尺寸一致
 
 ### `census.py`
@@ -251,7 +251,7 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 - **wct_radius**: 建議 3~5，影響 Census 特徵範圍
 - **base_weight**: 預設 8.0，通常不需調整
 - **guided_radius**: 建議 3~5，影響平滑程度
-- **guided_eps**: 依影像亮度尺度調整；未正規化時直接使用 paper 的 eps 量級
+- **guided_eps**: 影像正規化到 0~1 時，常見範圍為 0.001~0.01
 
 ## 輸出說明
 
