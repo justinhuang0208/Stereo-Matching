@@ -244,7 +244,7 @@ def compute_wct_cost_volume(
         raise ValueError("left/right 影像尺寸不一致。")
 
     # 初始化 DSI cost volume，預設為最大成本
-    dsi: np.ndarray = np.empty((height, width, dmax), dtype=np.float32)
+    dsi: np.ndarray = np.full((height, width, dmax), large_value, dtype=np.float32)
     weight_vector: np.ndarray = weights.astype(np.float32)
 
     if parallel:
