@@ -209,7 +209,6 @@ def compute_wct_cost_volume(
     radius: int = 4,
     base_weight: float = 8.0,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    parallel: bool = True,
     parallel_chunk: int = 8,
 ) -> np.ndarray:
     """計算加權 Census Transform (WCT) 的 DSI cost volume。
@@ -220,7 +219,6 @@ def compute_wct_cost_volume(
         dmax: 最大視差數量。
         radius: Census 半徑。
         base_weight: r=1 的基準權重。
-        parallel: 是否啟用 Numba 平行化路徑。
         parallel_chunk: 平行化時每次處理的視差數量。
     回傳:
         DSI cost volume，形狀為 (H, W, D)。
@@ -252,49 +250,20 @@ def compute_wct_cost_volume(
     dsi: np.ndarray = np.full((height, width, dmax), large_value, dtype=np.float32)
     weight_vector: np.ndarray = weights.astype(np.float32)
 
-    if parallel:
-        for d_start in range(0, dmax, parallel_chunk):
-            d_end: int = min(d_start + parallel_chunk, dmax)
-            _compute_wct_cost_volume_parallel_range(
-                left_bits,
-                right_bits,
-                left_valid,
-                right_valid,
-                weight_vector,
-                dsi,
-                d_start,
-                d_end,
-                float(large_value),
-            )
-            if progress_callback is not None:
-                progress_callback(d_end, dmax, "WCT cost volume")
-        return dsi
-
-    # 逐視差計算 WCT cost，並依有效遮罩填入
-    for d in range(dmax):
-        if d >= width:
-            if progress_callback is not None:
-                progress_callback(d + 1, dmax, "WCT cost volume")
-            continue
-        if d == 0:
-            xor_bits: np.ndarray = left_bits ^ right_bits
-            cost_slice: np.ndarray = np.tensordot(
-                weight_vector,
-                xor_bits.astype(np.float32),
-                axes=(0, 0),
-            )
-            valid_slice: np.ndarray = left_valid & right_valid
-            dsi[:, :, d] = np.where(valid_slice, cost_slice, large_value)
-        else:
-            xor_bits = left_bits[:, :, d:] ^ right_bits[:, :, :-d]
-            cost_slice = np.tensordot(
-                weight_vector,
-                xor_bits.astype(np.float32),
-                axes=(0, 0),
-            )
-            valid_slice = left_valid[:, d:] & right_valid[:, :-d]
-            dsi[:, d:, d] = np.where(valid_slice, cost_slice, large_value)
+    for d_start in range(0, dmax, parallel_chunk):
+        d_end: int = min(d_start + parallel_chunk, dmax)
+        _compute_wct_cost_volume_parallel_range(
+            left_bits,
+            right_bits,
+            left_valid,
+            right_valid,
+            weight_vector,
+            dsi,
+            d_start,
+            d_end,
+            float(large_value),
+        )
         if progress_callback is not None:
-            progress_callback(d + 1, dmax, "WCT cost volume")
+            progress_callback(d_end, dmax, "WCT cost volume")
 
     return dsi
