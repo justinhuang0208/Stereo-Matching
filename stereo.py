@@ -477,9 +477,10 @@ def _build_run_metadata(
         resolved_gt_mask: GT 遮罩路徑。
 
     回傳:
-        參數摘要字典。
+        參數摘要字典（僅保留與當前濾波器相關的設定）。
     """
-    return {
+    filter_key: str = str(args.filter).strip().lower()
+    metadata: Dict[str, str] = {
         "timestamp": run_dir.name,
         "run_dir": str(run_dir),
         "left": str(resolved_left),
@@ -487,14 +488,7 @@ def _build_run_metadata(
         "dmax": str(resolved_dmax),
         "wct_radius": str(args.wct_radius),
         "base_weight": str(args.base_weight),
-        "guided_radius": str(args.guided_radius),
-        "guided_eps": str(args.guided_eps),
         "filter": str(args.filter),
-        "median_radius": str(args.median_radius),
-        "median_method": str(args.median_method),
-        "median_block_rows": str(args.median_block_rows),
-        "gaussian_sigma": str(args.gaussian_sigma),
-        "bilateral_sigma": str(args.bilateral_sigma),
         "bad_threshold": str(args.bad_threshold),
         "eval": str(True),
         "gt": str(resolved_gt),
@@ -507,6 +501,18 @@ def _build_run_metadata(
         "output_disparity_npz": str(output_npz),
         "output_metrics_json": "" if output_metrics is None else str(output_metrics),
     }
+    if filter_key == "guided":
+        metadata["guided_radius"] = str(args.guided_radius)
+        metadata["guided_eps"] = str(args.guided_eps)
+    elif filter_key == "median":
+        metadata["median_radius"] = str(args.median_radius)
+        metadata["median_method"] = str(args.median_method)
+        metadata["median_block_rows"] = str(args.median_block_rows)
+    elif filter_key == "gaussian":
+        metadata["gaussian_sigma"] = str(args.gaussian_sigma)
+    elif filter_key == "bilateral":
+        metadata["bilateral_sigma"] = str(args.bilateral_sigma)
+    return metadata
 
 
 def _write_run_metadata(path: Path, metadata: Dict[str, str]) -> None:

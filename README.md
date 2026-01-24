@@ -8,6 +8,18 @@
 pip install numpy pillow opencv-python
 ```
 
+## 資料集下載與檢查
+
+專案提供 `ensure_dataset.py` 用來確認 `dataset/` 是否存在且 23 個 Middlebury 2014 perfect 資料集都完整。若缺少或不完整，會自動下載並解壓縮到 `dataset/`（zip 會保存在 `dataset/zips/`）。
+
+```bash
+# 檢查並自動補齊（預設）
+python ensure_dataset.py
+
+# 只檢查不下載
+python ensure_dataset.py --check-only
+```
+
 ## 使用方法
 
 ### 方法一：命令列介面 (CLI)

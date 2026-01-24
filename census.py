@@ -242,7 +242,7 @@ def compute_wct_cost_volume(
     large_value: float = float(np.sum(weights)) * 10.0
     offsets_array: np.ndarray = _offsets_to_array(offsets)
 
-    # 先計算左右影像的 Census bits 與有效遮罩
+    # 計算左右影像的 Census bits 與有效遮罩
     left_bits, left_valid = compute_census_bits_numba(left, offsets_array)
     right_bits, right_valid = compute_census_bits_numba(right, offsets_array)
     if left_valid.shape != right_valid.shape:
