@@ -23,7 +23,7 @@ DEFAULT_GUIDED_RADIUS: int = 3
 DEFAULT_GUIDED_EPS: float = 0.01
 DEFAULT_FILTER_TYPE: str = "guided"
 DEFAULT_MEDIAN_RADIUS: int = 3
-DEFAULT_MEDIAN_METHOD: str = "auto"
+DEFAULT_MEDIAN_METHOD: str = "opencv"
 DEFAULT_MEDIAN_BLOCK_ROWS: int = 128
 DEFAULT_GAUSSIAN_SIGMA: float = 1.0
 DEFAULT_BILATERAL_SIGMA: float = 1.0
@@ -113,7 +113,7 @@ def aggregate_and_wta(
         guided_eps: 正則化項。
         filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
         median_radius: Median Filter 視窗半徑。
-        median_method: Median Filter 計算方法（auto, scipy, vectorized, naive）。
+        median_method: Median Filter 計算方法（opencv, scipy, vectorized, naive）。
         median_block_rows: Median Filter 分塊列數。
         gaussian_sigma: Gaussian Filter 標準差。
         bilateral_sigma: Bilateral Filter 標準差。
@@ -203,7 +203,7 @@ def compute_disparity(
         guided_eps: Guided Filter 正則化項。
         filter_type: 聚合濾波器類型（guided, median, gaussian, bilateral）。
         median_radius: Median Filter 視窗半徑。
-        median_method: Median Filter 計算方法（auto, scipy, vectorized, naive）。
+        median_method: Median Filter 計算方法（opencv, scipy, vectorized, naive）。
         median_block_rows: Median Filter 分塊列數。
         gaussian_sigma: Gaussian Filter 標準差。
         bilateral_sigma: Bilateral Filter 標準差。
@@ -403,13 +403,7 @@ def _parse_args() -> argparse.Namespace:
         help="聚合濾波器類型",
     )
     parser.add_argument("--median_radius", type=int, default=DEFAULT_MEDIAN_RADIUS, help="Median Filter 半徑")
-    parser.add_argument(
-        "--median_method",
-        type=str,
-        default=DEFAULT_MEDIAN_METHOD,
-        choices=["auto", "scipy", "vectorized", "naive"],
-        help="Median Filter 計算方法",
-    )
+    parser.set_defaults(median_method=DEFAULT_MEDIAN_METHOD)
     parser.add_argument(
         "--median_block_rows",
         type=int,

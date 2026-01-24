@@ -39,7 +39,7 @@ def generate_offsets(radius: int = 4) -> List[Tuple[int, int, int]]:
         (-1, -1),
     )
     offsets: List[Tuple[int, int, int]] = []
-    for dx, dy in directions:
+    for dy, dx in directions:
         for r in range(1, radius + 1):
             offsets.append((dy * r, dx * r, r))
     return offsets
@@ -49,7 +49,7 @@ def compute_weights(offsets: Sequence[Tuple[int, int, int]], base_weight: float 
     """依距離生成權重，距離每增加 1 權重除以 2。
 
     參數:
-        offsets: 位移清單，包含 (dy, dx, r)。
+        offsets: 位移陣列，形狀為 (N, 3) 的整數位移 (dy, dx, r)。
         base_weight: r=1 的基準權重。
 
     回傳:
@@ -73,7 +73,7 @@ def _compute_valid_bounds_numba(
     Args:
         height: 影像高度（像素數）。
         width: 影像寬度（像素數）。
-        offsets: 位移陣列，形狀為 (N, 2) 的整數位移 (dy, dx)。
+        offsets: 位移陣列，形狀為 (N, 3) 的整數位移 (dy, dx, r)。
 
     Returns:
         y_start: 有效中心像素的起始列索引（含）。
@@ -113,7 +113,7 @@ def compute_census_bits_numba(
 
     Args:
         image: 單通道影像，形狀為 (H, W)。
-        offsets: 位移陣列，形狀為 (N, 2) 的整數位移 (dy, dx)。
+        offsets: 位移陣列，形狀為 (N, 3) 的整數位移 (dy, dx, r)。
 
     Returns:
         bits: Census bits，形狀為 (N, H, W) 的布林陣列。
@@ -135,10 +135,14 @@ def compute_census_bits_numba(
     for idx in numba.prange(num_offsets):
         dy: int = int(offsets[idx, 0])
         dx: int = int(offsets[idx, 1])
-        y_src_start: int = 0 if dy >= 0 else -dy
-        y_src_end: int = height - (dy if dy > 0 else 0)
-        x_src_start: int = 0 if dx >= 0 else -dx
-        x_src_end: int = width - (dx if dx > 0 else 0)
+        # 計算有效的中心像素範圍，確保鄰居點 (y+dy, x+dx) 不會超出影像邊界
+        # 當 dy < 0（向上移動）時，中心點 y 必須從 -dy 開始，否則鄰居會超出上邊界
+        y_src_start: int = -dy if dy < 0 else 0
+        # 當 dy > 0（向下移動）時，中心點 y 最大只能到 height - dy，否則鄰居會超出下邊界
+        y_src_end: int = height - dy if dy > 0 else height
+        # x 方向的邏輯與 y 方向相同
+        x_src_start: int = -dx if dx < 0 else 0
+        x_src_end: int = width - dx if dx > 0 else width
         if y_src_start >= y_src_end or x_src_start >= x_src_end:
             continue
         for y in range(y_src_start, y_src_end):
@@ -183,6 +187,7 @@ def _compute_wct_cost_volume_parallel_range(
     for d in numba.prange(d_start, d_end):
         for y in range(height):
             for x in range(width):
+                # 判斷視差 d 在右影像中是否超出了左邊界
                 if d > 0 and x < d:
                     dsi[y, x, d] = large_value
                     continue

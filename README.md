@@ -5,7 +5,7 @@
 ## 安裝依賴
 
 ```bash
-pip install numpy pillow
+pip install numpy pillow opencv-python
 ```
 
 ## 使用方法
@@ -35,7 +35,7 @@ python stereo.py --left <左影像路徑> --right <右影像路徑> --dmax <最�
 - `--guided_radius`: Guided Filter 視窗半徑（預設：3）
 - `--guided_eps`: Guided Filter 正則化項（預設：0.0154，依影像尺度調整）
 - `--filter`: 聚合濾波器類型（guided, median, gaussian, bilateral）
-- `--median_radius`: Median Filter 視窗半徑（預設：3）
+- `--median_radius`: Median Filter 視窗半徑（預設：3，預設使用 OpenCV medianBlur）
 - `--gaussian_sigma`: Gaussian sigma（預設：1.0）
 - `--bilateral_sigma`: Bilateral sigma（預設：1.0）
 - `--bad_threshold`: Bad pixel 閾值（預設：1.0）
@@ -215,7 +215,7 @@ filtered = guided_filter(guide=left_gray, src=cost_layer, radius=3, eps=0.01)
 from filters import median_filter, gaussian_filter, bilateral_filter
 
 median = median_filter(cost_layer, radius=3)
-gaussian = gaussian_filter(cost_layer, sigma=1.0)
+gaussian = gaussian_filter(cost_layer, sigma=1.0, method="opencv")
 bilateral = bilateral_filter(cost_layer, sigma=1.0)
 ```
 
@@ -238,7 +238,7 @@ bilateral = bilateral_filter(cost_layer, sigma=1.0)
 
 ### `filters.py`
 - `median_filter(image, radius)`: Median Filter
-- `gaussian_filter(image, sigma)`: Gaussian Filter
+- `gaussian_filter(image, sigma, method="opencv")`: Gaussian Filter
 - `bilateral_filter(image, sigma)`: Bilateral Filter
 
 ### `stereo.py`

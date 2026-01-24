@@ -9,6 +9,10 @@ import numpy as np
 
 _SCIPY_MEDIAN_FILTER: Optional[Callable[..., np.ndarray]] = None
 _SCIPY_CHECKED: bool = False
+_OPENCV_MEDIAN_BLUR: Optional[Callable[..., np.ndarray]] = None
+_OPENCV_CHECKED: bool = False
+_OPENCV_GAUSSIAN_BLUR: Optional[Callable[..., np.ndarray]] = None
+_OPENCV_GAUSSIAN_CHECKED: bool = False
 
 
 def _validate_2d(image: np.ndarray, name: str) -> None:
@@ -58,6 +62,36 @@ def _get_scipy_median_filter() -> Optional[Callable[..., np.ndarray]]:
     return _SCIPY_MEDIAN_FILTER
 
 
+def _get_opencv_median_blur() -> Optional[Callable[..., np.ndarray]]:
+    """取得 OpenCV medianBlur 函式（若可用）。"""
+    global _OPENCV_MEDIAN_BLUR, _OPENCV_CHECKED
+    if _OPENCV_CHECKED:
+        return _OPENCV_MEDIAN_BLUR
+    _OPENCV_CHECKED = True
+    spec = importlib.util.find_spec("cv2")
+    if spec is None:
+        return None
+    module = importlib.import_module("cv2")
+    median_blur: Callable[..., np.ndarray] = getattr(module, "medianBlur")
+    _OPENCV_MEDIAN_BLUR = median_blur
+    return _OPENCV_MEDIAN_BLUR
+
+
+def _get_opencv_gaussian_blur() -> Optional[Callable[..., np.ndarray]]:
+    """取得 OpenCV GaussianBlur 函式（若可用）。"""
+    global _OPENCV_GAUSSIAN_BLUR, _OPENCV_GAUSSIAN_CHECKED
+    if _OPENCV_GAUSSIAN_CHECKED:
+        return _OPENCV_GAUSSIAN_BLUR
+    _OPENCV_GAUSSIAN_CHECKED = True
+    spec = importlib.util.find_spec("cv2")
+    if spec is None:
+        return None
+    module = importlib.import_module("cv2")
+    gaussian_blur: Callable[..., np.ndarray] = getattr(module, "GaussianBlur")
+    _OPENCV_GAUSSIAN_BLUR = gaussian_blur
+    return _OPENCV_GAUSSIAN_BLUR
+
+
 def _median_filter_naive(image: np.ndarray, radius: int) -> np.ndarray:
     """使用逐像素掃描的 median filter。"""
     height: int = image.shape[0]
@@ -102,51 +136,60 @@ def _median_filter_scipy(image: np.ndarray, radius: int) -> np.ndarray:
     return filtered.astype(np.float32)
 
 
-def median_filter(
-    image: np.ndarray,
-    radius: int,
-    method: str = "auto",
-    block_rows: int = 128,
-) -> np.ndarray:
-    """使用固定視窗半徑的 median filter。
-
-    參數:
-        image: 輸入 2D 影像。
-        radius: 視窗半徑。
-        method: 計算方法，"auto"、"scipy"、"vectorized" 或 "naive"。
-        block_rows: 每次處理的列數，用於控制記憶體占用。
-
-    回傳:
-        濾波後影像，形狀為 (H, W)。
-    """
-    _validate_2d(image, "image")
-    if radius <= 0:
-        raise ValueError("radius 必須為正整數。")
-    method_key: str = method.strip().lower()
-    if method_key == "auto":
-        if _get_scipy_median_filter() is not None:
-            return _median_filter_scipy(image, radius)
-        return _median_filter_vectorized(image, radius, block_rows)
-    if method_key == "scipy":
-        return _median_filter_scipy(image, radius)
-    if method_key == "vectorized":
-        return _median_filter_vectorized(image, radius, block_rows)
-    if method_key == "naive":
-        return _median_filter_naive(image, radius)
-    raise ValueError("method 必須為 'auto'、'scipy'、'vectorized' 或 'naive'。")
+def _scale_to_uint8(image: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    """將輸入線性縮放為 uint8，並回傳還原參數。"""
+    if not np.all(np.isfinite(image)):
+        raise ValueError("opencv medianBlur 需要有限值。")
+    min_value: float = float(np.min(image))
+    max_value: float = float(np.max(image))
+    if max_value == min_value:
+        scaled = np.zeros_like(image, dtype=np.uint8)
+        return scaled, min_value, 0.0
+    scale: float = 255.0 / (max_value - min_value)
+    scaled_float: np.ndarray = (image - min_value) * scale
+    scaled_clipped: np.ndarray = np.clip(scaled_float, 0.0, 255.0)
+    scaled_uint8: np.ndarray = np.rint(scaled_clipped).astype(np.uint8)
+    inv_scale: float = (max_value - min_value) / 255.0
+    return scaled_uint8, min_value, inv_scale
 
 
-def gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
-    """使用 Gaussian filter 平滑影像。
+def _prepare_opencv_median_input(image: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    """準備 OpenCV medianBlur 可接受的輸入格式。"""
+    if image.dtype == np.uint8:
+        prepared = image
+        offset: float = 0.0
+        inv_scale: float = 1.0
+    else:
+        prepared, offset, inv_scale = _scale_to_uint8(image.astype(np.float32))
+    if not prepared.flags["C_CONTIGUOUS"]:
+        prepared = np.ascontiguousarray(prepared)
+    return prepared, offset, inv_scale
 
-    參數:
-        image: 輸入 2D 影像。
-        sigma: Gaussian 標準差。
 
-    回傳:
-        濾波後影像，形狀為 (H, W)。
-    """
-    _validate_2d(image, "image")
+def _median_filter_opencv(image: np.ndarray, radius: int) -> np.ndarray:
+    """使用 OpenCV 的 median blur。"""
+    opencv_filter: Optional[Callable[..., np.ndarray]] = _get_opencv_median_blur()
+    if opencv_filter is None:
+        raise ValueError("opencv 未安裝，無法使用 opencv 方法。")
+    window_size: int = radius * 2 + 1
+    prepared, offset, inv_scale = _prepare_opencv_median_input(image)
+    filtered: np.ndarray = opencv_filter(prepared, window_size)
+    if inv_scale == 0.0:
+        return np.full(image.shape, offset, dtype=np.float32)
+    restored: np.ndarray = filtered.astype(np.float32) * inv_scale + offset
+    return restored
+
+
+def _prepare_opencv_gaussian_input(image: np.ndarray) -> np.ndarray:
+    """準備 OpenCV GaussianBlur 可接受的輸入格式。"""
+    prepared: np.ndarray = image.astype(np.float32, copy=False)
+    if not prepared.flags["C_CONTIGUOUS"]:
+        prepared = np.ascontiguousarray(prepared)
+    return prepared
+
+
+def _gaussian_filter_naive(image: np.ndarray, sigma: float) -> np.ndarray:
+    """使用逐像素掃描的 Gaussian filter。"""
     radius: int = _infer_radius_from_sigma(sigma)
     kernel: np.ndarray = _gaussian_kernel(radius, sigma)
     height: int = image.shape[0]
@@ -159,6 +202,78 @@ def gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
             window: np.ndarray = padded[y : y + size, x : x + size]
             output[y, x] = float(np.sum(window * kernel))
     return output
+
+
+def _gaussian_filter_opencv(image: np.ndarray, sigma: float) -> np.ndarray:
+    """使用 OpenCV 的 Gaussian blur。"""
+    gaussian_blur: Optional[Callable[..., np.ndarray]] = _get_opencv_gaussian_blur()
+    if gaussian_blur is None:
+        raise ValueError("opencv 未安裝，無法使用 opencv 方法。")
+    radius: int = _infer_radius_from_sigma(sigma)
+    window_size: int = radius * 2 + 1
+    prepared: np.ndarray = _prepare_opencv_gaussian_input(image)
+    module = importlib.import_module("cv2")
+    border_type: int = int(getattr(module, "BORDER_REFLECT_101", module.BORDER_DEFAULT))
+    filtered: np.ndarray = gaussian_blur(
+        prepared,
+        (window_size, window_size),
+        sigmaX=float(sigma),
+        sigmaY=float(sigma),
+        borderType=border_type,
+    )
+    return filtered.astype(np.float32)
+
+
+def median_filter(
+    image: np.ndarray,
+    radius: int,
+    method: str = "opencv",
+    block_rows: int = 128,
+) -> np.ndarray:
+    """使用固定視窗半徑的 median filter。
+
+    參數:
+        image: 輸入 2D 影像。
+        radius: 視窗半徑。
+        method: 計算方法，"opencv"、"scipy"、"vectorized" 或 "naive"。
+        block_rows: 每次處理的列數，用於控制記憶體占用。
+
+    回傳:
+        濾波後影像，形狀為 (H, W)。
+    """
+    _validate_2d(image, "image")
+    if radius <= 0:
+        raise ValueError("radius 必須為正整數。")
+    method_key: str = method.strip().lower()
+    if method_key == "opencv":
+        return _median_filter_opencv(image, radius)
+    if method_key == "scipy":
+        return _median_filter_scipy(image, radius)
+    if method_key == "vectorized":
+        return _median_filter_vectorized(image, radius, block_rows)
+    if method_key == "naive":
+        return _median_filter_naive(image, radius)
+    raise ValueError("method 必須為 'opencv'、'scipy'、'vectorized' 或 'naive'。")
+
+
+def gaussian_filter(image: np.ndarray, sigma: float, method: str = "opencv") -> np.ndarray:
+    """使用 Gaussian filter 平滑影像。
+
+    參數:
+        image: 輸入 2D 影像。
+        sigma: Gaussian 標準差。
+        method: 計算方法，"opencv" 或 "naive"。
+
+    回傳:
+        濾波後影像，形狀為 (H, W)。
+    """
+    _validate_2d(image, "image")
+    method_key: str = method.strip().lower()
+    if method_key == "opencv":
+        return _gaussian_filter_opencv(image, sigma)
+    if method_key == "naive":
+        return _gaussian_filter_naive(image, sigma)
+    raise ValueError("method 必須為 'opencv' 或 'naive'。")
 
 
 def bilateral_filter(image: np.ndarray, sigma: float) -> np.ndarray:
